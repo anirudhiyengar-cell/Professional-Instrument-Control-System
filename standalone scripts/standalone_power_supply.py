@@ -342,7 +342,7 @@ class StandalonePowerSupplyController:
     def disconnect(self):
         """Safely disconnect from power supply."""
         if self._power_supply:
-            print(f"{UIColors.INFO}Disconnecting power supply...{UIColors.RESET}")
+            print(f"{UIColors.INFO}Disconnecting power supply good bye ...{UIColors.RESET}")
             self._power_supply.disconnect()
             print(f"{UIColors.SUCCESS}Disconnected successfully{UIColors.RESET}")
 
