@@ -53,7 +53,7 @@ try:
     from instrument_control.keithley_dmm import KeithleyDMM6500, KeithleyDMM6500Error
     from instrument_control.keysight_oscilloscope import KeysightDSOX6004A, KeysightDSOX6004AError
 except ImportError as e:
-    print(f"{Fore.RED}Error importing instrument control modules: {e}")
+    print(f"{Fore.RED}Error importing instrument control module: {e}")
     print("Please ensure all instrument control modules are in the 'instrument_control' package")
     sys.exit(1)
 
