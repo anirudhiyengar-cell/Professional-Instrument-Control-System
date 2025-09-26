@@ -1,0 +1,99 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools-scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "professional-instrument-control"
+version = "1.0.0"
+description = "Professional-grade instrument control library for laboratory automation"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Professional Instrument Control Team", email = "support@example.com"}
+]
+maintainers = [
+    {name = "Professional Instrument Control Team", email = "support@example.com"}
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Manufacturing",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Interface Engine/Protocol Translator",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Hardware :: Hardware Drivers",
+]
+keywords = [
+    "instrument-control",
+    "laboratory-automation", 
+    "SCPI",
+    "VISA",
+    "keithley",
+    "keysight",
+    "multimeter",
+    "power-supply",
+    "oscilloscope",
+    "measurement"
+]
+requires-python = ">=3.8"
+dependencies = [
+    "pyvisa>=1.13.0",
+    "pyvisa-py>=0.5.3",
+    "numpy>=1.21.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=22.0.0", 
+    "pylint>=2.12.0",
+    "mypy>=0.910",
+    "pytest-cov>=4.0.0",
+]
+analysis = [
+    "scipy>=1.7.0",
+    "pandas>=1.3.0",
+    "matplotlib>=3.5.0",
+]
+
+[project.scripts]
+instrument-automation = "instrument_automation_system:main"
+
+[project.urls]
+"Homepage" = "https://github.com/example/professional-instrument-control"
+"Bug Reports" = "https://github.com/example/professional-instrument-control/issues"
+"Source" = "https://github.com/example/professional-instrument-control"
+"Documentation" = "https://professional-instrument-control.readthedocs.io/"
+
+[tool.setuptools.packages.find]
+include = ["instrument_control*"]
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+include = '\.pyi?$'
+
+[tool.pylint.messages_control]
+disable = ["C0103", "R0903", "R0913"]
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --strict-markers"
+testpaths = ["tests"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m "not slow"')",
+    "hardware: marks tests that require connected hardware",
+]
