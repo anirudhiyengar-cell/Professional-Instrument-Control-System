@@ -43,6 +43,12 @@ except ImportError as e:
     print("Please ensure the instrument_control package is in your Python path")
     sys.exit(1)
 
+# Shared waveform options for both generators
+WAVEFORM_OPTIONS = [
+    "ARB", "SIN", "SQU", "RAMP", "PULS", "DC", "NOIS",
+    "SINC", "EXPR", "EXPF", "CARD", "GAUS"
+]
+
 class OscilloscopeDataAcquisition:
     """
     Data Acquisition Handler for Oscilloscope Operations
@@ -606,14 +612,24 @@ class TrulyResponsiveAutomationGUI:
         ttk.Label(fgen_frame, text="Wave:", font=('Arial', 8)).grid(row=0, column=col, sticky='w', padx=(5, 2))
         col += 1
         self.wgen1_waveform_var = tk.StringVar(value="SIN")
-        ttk.Combobox(fgen_frame, textvariable=self.wgen1_waveform_var, values=["SIN", "SQU", "RAMP", "PULS", "DC", "NOIS"], width=6, state='readonly', font=('Arial', 8)).grid(row=0, column=col, padx=(0, 5))
+        self.wgen1_waveform_cb = ttk.Combobox(
+            fgen_frame,
+            textvariable=self.wgen1_waveform_var,
+            values=WAVEFORM_OPTIONS,
+            width=8,
+            state='readonly',
+            font=('Arial', 8)
+        )
+        self.wgen1_waveform_cb.grid(row=0, column=col, padx=(0, 5))
+        self.wgen1_waveform_cb.bind('<<ComboboxSelected>>', lambda e: self._on_waveform_selected(1))
         col += 1
 
         # WGEN1 Frequency
         ttk.Label(fgen_frame, text="Freq(Hz):", font=('Arial', 8)).grid(row=0, column=col, sticky='w', padx=(0, 2))
         col += 1
         self.wgen1_freq_var = tk.DoubleVar(value=1000.0)
-        ttk.Entry(fgen_frame, textvariable=self.wgen1_freq_var, width=10, font=('Arial', 8)).grid(row=0, column=col, padx=(0, 5))
+        self.wgen1_freq_entry = ttk.Entry(fgen_frame, textvariable=self.wgen1_freq_var, width=10, font=('Arial', 8))
+        self.wgen1_freq_entry.grid(row=0, column=col, padx=(0, 5))
         col += 1
 
         # WGEN1 Amplitude
@@ -649,14 +665,24 @@ class TrulyResponsiveAutomationGUI:
         ttk.Label(fgen_frame, text="Wave:", font=('Arial', 8)).grid(row=1, column=col, sticky='w', padx=(5, 2), pady=(3, 0))
         col += 1
         self.wgen2_waveform_var = tk.StringVar(value="SIN")
-        ttk.Combobox(fgen_frame, textvariable=self.wgen2_waveform_var, values=["SIN", "SQU", "RAMP", "PULS", "DC", "NOIS"], width=6, state='readonly', font=('Arial', 8)).grid(row=1, column=col, padx=(0, 5), pady=(3, 0))
+        self.wgen2_waveform_cb = ttk.Combobox(
+            fgen_frame,
+            textvariable=self.wgen2_waveform_var,
+            values=WAVEFORM_OPTIONS,
+            width=8,
+            state='readonly',
+            font=('Arial', 8)
+        )
+        self.wgen2_waveform_cb.grid(row=1, column=col, padx=(0, 5), pady=(3, 0))
+        self.wgen2_waveform_cb.bind('<<ComboboxSelected>>', lambda e: self._on_waveform_selected(2))
         col += 1
 
         # WGEN2 Frequency
         ttk.Label(fgen_frame, text="Freq(Hz):", font=('Arial', 8)).grid(row=1, column=col, sticky='w', padx=(0, 2), pady=(3, 0))
         col += 1
         self.wgen2_freq_var = tk.DoubleVar(value=1000.0)
-        ttk.Entry(fgen_frame, textvariable=self.wgen2_freq_var, width=10, font=('Arial', 8)).grid(row=1, column=col, padx=(0, 5), pady=(3, 0))
+        self.wgen2_freq_entry = ttk.Entry(fgen_frame, textvariable=self.wgen2_freq_var, width=10, font=('Arial', 8))
+        self.wgen2_freq_entry.grid(row=1, column=col, padx=(0, 5), pady=(3, 0))
         col += 1
 
         # WGEN2 Amplitude
@@ -677,6 +703,31 @@ class TrulyResponsiveAutomationGUI:
         self.wgen2_apply_btn = ttk.Button(fgen_frame, text="Apply WGEN2", command=lambda: self.configure_wgen(2), style='Primary.TButton', state='disabled')
         self.wgen2_apply_btn.grid(row=1, column=col, sticky='ew', padx=2, pady=(3, 0))
         col += 1
+
+        # Initialize frequency enable state based on default waveform selections
+        self._on_waveform_selected(1)
+        self._on_waveform_selected(2)
+
+    def _on_waveform_selected(self, generator: int):
+        """Enable/disable frequency entry depending on waveform (disable for DC)."""
+        try:
+            if generator == 1:
+                wf = (self.wgen1_waveform_var.get() or "").upper()
+                entry = self.wgen1_freq_entry
+            else:
+                wf = (self.wgen2_waveform_var.get() or "").upper()
+                entry = self.wgen2_freq_entry
+
+            if wf == "DC":
+                entry.configure(state='disabled')
+            else:
+                entry.configure(state='normal')
+        except Exception as e:
+            # Non-fatal UI error, log to status if available
+            try:
+                self.log_message(f"Waveform handler error: {e}", "ERROR")
+            except Exception:
+                pass
 
     def create_file_preferences_frame(self, parent, row):
         """Create ULTRA-COMPACT file preferences"""
