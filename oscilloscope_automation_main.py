@@ -441,9 +441,10 @@ class TrulyResponsiveAutomationGUI:
         main_frame.rowconfigure(0, weight=0)  # Title - fixed size
         main_frame.rowconfigure(1, weight=0)  # Connection controls - fixed size  
         main_frame.rowconfigure(2, weight=0)  # Channel configuration - fixed size
-        main_frame.rowconfigure(3, weight=0)  # File preferences - fixed size
-        main_frame.rowconfigure(4, weight=0)  # Operation buttons - fixed size
-        main_frame.rowconfigure(5, weight=1)  # Status/Log area - EXPANDABLE
+        main_frame.rowconfigure(3, weight=0)  # Function generator configuration - fixed size
+        main_frame.rowconfigure(4, weight=0)  # File preferences - fixed size
+        main_frame.rowconfigure(5, weight=0)  # Operation buttons - fixed size
+        main_frame.rowconfigure(6, weight=1)  # Status/Log area - EXPANDABLE
 
         # Create title label at the top
         title_label = ttk.Label(main_frame, 
@@ -455,9 +456,10 @@ class TrulyResponsiveAutomationGUI:
         # Each section is placed in its designated row
         self.create_connection_frame(main_frame, row=1)
         self.create_channel_config_frame(main_frame, row=2)
-        self.create_file_preferences_frame(main_frame, row=3)
-        self.create_operations_frame(main_frame, row=4)
-        self.create_status_frame(main_frame, row=5)  # This expands to fill remaining space
+        self.create_function_generator_frame(main_frame, row=3)
+        self.create_file_preferences_frame(main_frame, row=4)
+        self.create_operations_frame(main_frame, row=5)
+        self.create_status_frame(main_frame, row=6)  # This expands to fill remaining space
 
         # Store reference to main frame for potential future use
         self.main_frame = main_frame
@@ -548,7 +550,7 @@ class TrulyResponsiveAutomationGUI:
         ttk.Label(config_frame, text="V/div:", font=('Arial', 8)).grid(row=0, column=col, sticky='w')
         col += 1
         self.v_scale_var = tk.DoubleVar(value=1.0)
-        ttk.Combobox(config_frame, textvariable=self.v_scale_var, values=[0.5, 1.0, 2.0, 3.0, 4.0, 5.0], width=6, state='readonly', font=('Arial', 8)).grid(row=0, column=col, padx=(0, 8))
+        ttk.Combobox(config_frame, textvariable=self.v_scale_var, values=[0.5, 1.0, 2.0, 5.0, 10.0], width=6, state='readonly', font=('Arial', 8)).grid(row=0, column=col, padx=(0, 8))
         col += 1
 
         ttk.Label(config_frame, text="Offset:", font=('Arial', 8)).grid(row=0, column=col, sticky='w')
@@ -574,6 +576,107 @@ class TrulyResponsiveAutomationGUI:
 
         # Allow last column to expand
         config_frame.columnconfigure(col, weight=1)
+
+    def create_function_generator_frame(self, parent, row):
+        """
+        Create function generator configuration frame for both WGEN1 and WGEN2.
+        
+        Provides controls for configuring waveform type, frequency, amplitude, and offset
+        for each of the 2 built-in function generators.
+        """
+        fgen_frame = ttk.LabelFrame(parent, text="Function Generators (WGEN1 & WGEN2)", padding="3")
+        fgen_frame.grid(row=row, column=0, sticky='ew', pady=(0, 2))
+
+        # Configure columns for proper expansion
+        for i in range(20):
+            fgen_frame.columnconfigure(i, weight=0)
+        fgen_frame.columnconfigure(19, weight=1)  # Last column expands
+
+        # Row 0: WGEN1 controls
+        col = 0
+        ttk.Label(fgen_frame, text="WGEN1:", font=('Arial', 8, 'bold'), foreground='#1a365d').grid(row=0, column=col, sticky='w', padx=(0, 5))
+        col += 1
+
+        # WGEN1 Enable checkbox
+        self.wgen1_enable_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(fgen_frame, text="Enable", variable=self.wgen1_enable_var, style='TCheckbutton').grid(row=0, column=col, padx=2)
+        col += 1
+
+        # WGEN1 Waveform
+        ttk.Label(fgen_frame, text="Wave:", font=('Arial', 8)).grid(row=0, column=col, sticky='w', padx=(5, 2))
+        col += 1
+        self.wgen1_waveform_var = tk.StringVar(value="SIN")
+        ttk.Combobox(fgen_frame, textvariable=self.wgen1_waveform_var, values=["SIN", "SQU", "RAMP", "PULS", "DC", "NOIS"], width=6, state='readonly', font=('Arial', 8)).grid(row=0, column=col, padx=(0, 5))
+        col += 1
+
+        # WGEN1 Frequency
+        ttk.Label(fgen_frame, text="Freq(Hz):", font=('Arial', 8)).grid(row=0, column=col, sticky='w', padx=(0, 2))
+        col += 1
+        self.wgen1_freq_var = tk.DoubleVar(value=1000.0)
+        ttk.Entry(fgen_frame, textvariable=self.wgen1_freq_var, width=10, font=('Arial', 8)).grid(row=0, column=col, padx=(0, 5))
+        col += 1
+
+        # WGEN1 Amplitude
+        ttk.Label(fgen_frame, text="Amp(Vpp):", font=('Arial', 8)).grid(row=0, column=col, sticky='w', padx=(0, 2))
+        col += 1
+        self.wgen1_amp_var = tk.DoubleVar(value=1.0)
+        ttk.Entry(fgen_frame, textvariable=self.wgen1_amp_var, width=8, font=('Arial', 8)).grid(row=0, column=col, padx=(0, 5))
+        col += 1
+
+        # WGEN1 Offset
+        ttk.Label(fgen_frame, text="Offset(V):", font=('Arial', 8)).grid(row=0, column=col, sticky='w', padx=(0, 2))
+        col += 1
+        self.wgen1_offset_var = tk.DoubleVar(value=0.0)
+        ttk.Entry(fgen_frame, textvariable=self.wgen1_offset_var, width=8, font=('Arial', 8)).grid(row=0, column=col, padx=(0, 5))
+        col += 1
+
+        # WGEN1 Apply button
+        self.wgen1_apply_btn = ttk.Button(fgen_frame, text="Apply WGEN1", command=lambda: self.configure_wgen(1), style='Primary.TButton', state='disabled')
+        self.wgen1_apply_btn.grid(row=0, column=col, sticky='ew', padx=2)
+        col += 1
+
+        # Row 1: WGEN2 controls
+        col = 0
+        ttk.Label(fgen_frame, text="WGEN2:", font=('Arial', 8, 'bold'), foreground='#1a365d').grid(row=1, column=col, sticky='w', padx=(0, 5), pady=(3, 0))
+        col += 1
+
+        # WGEN2 Enable checkbox
+        self.wgen2_enable_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(fgen_frame, text="Enable", variable=self.wgen2_enable_var, style='TCheckbutton').grid(row=1, column=col, padx=2, pady=(3, 0))
+        col += 1
+
+        # WGEN2 Waveform
+        ttk.Label(fgen_frame, text="Wave:", font=('Arial', 8)).grid(row=1, column=col, sticky='w', padx=(5, 2), pady=(3, 0))
+        col += 1
+        self.wgen2_waveform_var = tk.StringVar(value="SIN")
+        ttk.Combobox(fgen_frame, textvariable=self.wgen2_waveform_var, values=["SIN", "SQU", "RAMP", "PULS", "DC", "NOIS"], width=6, state='readonly', font=('Arial', 8)).grid(row=1, column=col, padx=(0, 5), pady=(3, 0))
+        col += 1
+
+        # WGEN2 Frequency
+        ttk.Label(fgen_frame, text="Freq(Hz):", font=('Arial', 8)).grid(row=1, column=col, sticky='w', padx=(0, 2), pady=(3, 0))
+        col += 1
+        self.wgen2_freq_var = tk.DoubleVar(value=1000.0)
+        ttk.Entry(fgen_frame, textvariable=self.wgen2_freq_var, width=10, font=('Arial', 8)).grid(row=1, column=col, padx=(0, 5), pady=(3, 0))
+        col += 1
+
+        # WGEN2 Amplitude
+        ttk.Label(fgen_frame, text="Amp(Vpp):", font=('Arial', 8)).grid(row=1, column=col, sticky='w', padx=(0, 2), pady=(3, 0))
+        col += 1
+        self.wgen2_amp_var = tk.DoubleVar(value=1.0)
+        ttk.Entry(fgen_frame, textvariable=self.wgen2_amp_var, width=8, font=('Arial', 8)).grid(row=1, column=col, padx=(0, 5), pady=(3, 0))
+        col += 1
+
+        # WGEN2 Offset
+        ttk.Label(fgen_frame, text="Offset(V):", font=('Arial', 8)).grid(row=1, column=col, sticky='w', padx=(0, 2), pady=(3, 0))
+        col += 1
+        self.wgen2_offset_var = tk.DoubleVar(value=0.0)
+        ttk.Entry(fgen_frame, textvariable=self.wgen2_offset_var, width=8, font=('Arial', 8)).grid(row=1, column=col, padx=(0, 5), pady=(3, 0))
+        col += 1
+
+        # WGEN2 Apply button
+        self.wgen2_apply_btn = ttk.Button(fgen_frame, text="Apply WGEN2", command=lambda: self.configure_wgen(2), style='Primary.TButton', state='disabled')
+        self.wgen2_apply_btn.grid(row=1, column=col, sticky='ew', padx=2, pady=(3, 0))
+        col += 1
 
     def create_file_preferences_frame(self, parent, row):
         """Create ULTRA-COMPACT file preferences"""
@@ -863,7 +966,7 @@ class TrulyResponsiveAutomationGUI:
         """Disable operation buttons"""
         buttons = [self.screenshot_btn, self.acquire_data_btn, self.export_csv_btn,
                   self.generate_plot_btn, self.full_automation_btn, self.open_folder_btn,
-                  self.config_channel_btn, self.test_btn]
+                  self.config_channel_btn, self.test_btn, self.wgen1_apply_btn, self.wgen2_apply_btn]
         for btn in buttons:
             try:
                 btn.configure(state='disabled')
@@ -874,7 +977,7 @@ class TrulyResponsiveAutomationGUI:
         """Enable operation buttons"""
         buttons = [self.screenshot_btn, self.acquire_data_btn, self.export_csv_btn,
                   self.generate_plot_btn, self.full_automation_btn, self.open_folder_btn,
-                  self.config_channel_btn, self.test_btn]
+                  self.config_channel_btn, self.test_btn, self.wgen1_apply_btn, self.wgen2_apply_btn]
         for btn in buttons:
             try:
                 btn.configure(state='normal')
@@ -967,6 +1070,55 @@ class TrulyResponsiveAutomationGUI:
                 messagebox.showerror("Test", "Not connected")
         except Exception as e:
             self.log_message(f"Test error: {e}", "ERROR")
+
+    def configure_wgen(self, generator):
+        """
+        Configure a function generator with the specified settings.
+        
+        Args:
+            generator: Generator number (1 or 2)
+        """
+        def wgen_config_thread():
+            try:
+                # Get configuration parameters based on generator number
+                if generator == 1:
+                    enable = self.wgen1_enable_var.get()
+                    waveform = self.wgen1_waveform_var.get()
+                    frequency = self.wgen1_freq_var.get()
+                    amplitude = self.wgen1_amp_var.get()
+                    offset = self.wgen1_offset_var.get()
+                else:  # generator == 2
+                    enable = self.wgen2_enable_var.get()
+                    waveform = self.wgen2_waveform_var.get()
+                    frequency = self.wgen2_freq_var.get()
+                    amplitude = self.wgen2_amp_var.get()
+                    offset = self.wgen2_offset_var.get()
+
+                self.update_status(f"Configuring WGEN{generator}...")
+                self.log_message(f"Configuring WGEN{generator}: {waveform}, {frequency}Hz, {amplitude}Vpp, {offset}V offset, Enable: {enable}")
+
+                # Configure the function generator
+                success = self.oscilloscope.configure_function_generator(
+                    generator=generator,
+                    waveform=waveform,
+                    frequency=frequency,
+                    amplitude=amplitude,
+                    offset=offset,
+                    enable=enable
+                )
+
+                if success:
+                    self.status_queue.put(("wgen_configured", f"WGEN{generator} configured successfully"))
+                else:
+                    self.status_queue.put(("error", f"WGEN{generator} configuration failed"))
+                    
+            except Exception as e:
+                self.status_queue.put(("error", f"WGEN{generator} config error: {str(e)}"))
+
+        if self.oscilloscope and self.oscilloscope.is_connected:
+            threading.Thread(target=wgen_config_thread, daemon=True).start()
+        else:
+            messagebox.showerror("Error", "Not connected")
 
     def configure_channel(self):
         """
@@ -1417,6 +1569,10 @@ class TrulyResponsiveAutomationGUI:
                 elif status_type == "channel_configured":
                     self.log_message(data, "SUCCESS")
                     self.update_status("Channel configured")
+
+                elif status_type == "wgen_configured":
+                    self.log_message(data, "SUCCESS")
+                    self.update_status("Function generator configured")
 
                 elif status_type == "full_automation_complete":
                     self.last_acquired_data = data['data']
