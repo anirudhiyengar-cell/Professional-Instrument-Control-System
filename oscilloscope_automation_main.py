@@ -548,7 +548,7 @@ class TrulyResponsiveAutomationGUI:
         ttk.Label(config_frame, text="V/div:", font=('Arial', 8)).grid(row=0, column=col, sticky='w')
         col += 1
         self.v_scale_var = tk.DoubleVar(value=1.0)
-        ttk.Combobox(config_frame, textvariable=self.v_scale_var, values=[0.001, 0.01, 0.1, 1.0, 10.0], width=6, state='readonly', font=('Arial', 8)).grid(row=0, column=col, padx=(0, 8))
+        ttk.Combobox(config_frame, textvariable=self.v_scale_var, values=[0.5, 1.0, 2.0, 3.0, 4.0, 5.0], width=6, state='readonly', font=('Arial', 8)).grid(row=0, column=col, padx=(0, 8))
         col += 1
 
         ttk.Label(config_frame, text="Offset:", font=('Arial', 8)).grid(row=0, column=col, sticky='w')
