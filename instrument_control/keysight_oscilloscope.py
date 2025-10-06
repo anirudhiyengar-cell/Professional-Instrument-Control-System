@@ -149,3 +149,68 @@ class KeysightDSOX6004A:
         self.graph_dir = base_path / "oscilloscope_graphs"
         for directory in [self.screenshot_dir, self.data_dir, self.graph_dir]:
             directory.mkdir(exist_ok=True)
+
+    def configure_function_generator(self, generator: int, waveform: str, frequency: float, amplitude: float, offset: float, enable: bool) -> bool:
+        """
+        Configure the built-in function generator.
+
+        Args:
+            generator: 1 or 2 (WGEN1 / WGEN2)
+            waveform: One of ['ARB','SIN','SQU','RAMP','PULS','DC','NOIS','SINC','EXPR','EXPF','CARD','GAUS']
+            frequency: Frequency in Hz (ignored for DC)
+            amplitude: Output amplitude in Vpp
+            offset: DC offset in V
+            enable: Output on/off
+
+        Returns:
+            True if configuration succeeds, else False.
+        """
+        if not self.is_connected:
+            self._logger.error("Cannot configure WaveGen: not connected")
+            return False
+        if generator not in (1, 2):
+            raise ValueError(f"Generator must be 1 or 2, got {generator}")
+
+        try:
+            wf = (waveform or "").strip().upper()
+            # Map GUI codes to SCPI mnemonics (mostly identical for Keysight WaveGen)
+            valid_waves = {
+                "ARB": "ARB",
+                "SIN": "SIN",
+                "SQU": "SQU",
+                "RAMP": "RAMP",
+                "PULS": "PULS",
+                "DC": "DC",
+                "NOIS": "NOIS",
+                "SINC": "SINC",
+                "EXPR": "EXPR",
+                "EXPF": "EXPF",
+                "CARD": "CARD",
+                "GAUS": "GAUS",
+            }
+            if wf not in valid_waves:
+                raise ValueError(f"Invalid waveform '{waveform}'. Valid: {list(valid_waves.keys())}")
+
+            prefix = f":WGEN{generator}"
+
+            # Set function first
+            self._scpi_wrapper.write(f"{prefix}:FUNC {valid_waves[wf]}")
+
+            # Some functions may not use frequency (e.g., DC). Guard accordingly.
+            if wf != "DC":
+                self._scpi_wrapper.write(f"{prefix}:FREQ {float(frequency)}")
+
+            # Set amplitude (Vpp) and offset (V)
+            self._scpi_wrapper.write(f"{prefix}:VOLT {float(amplitude)}")
+            self._scpi_wrapper.write(f"{prefix}:VOLT:OFFS {float(offset)}")
+
+            # Enable/disable output
+            self._scpi_wrapper.write(f"{prefix}:STATe {1 if enable else 0}")
+
+            # Optional verification
+            func_set = self._scpi_wrapper.query(f"{prefix}:FUNC?").strip()
+            self._logger.info(f"WGEN{generator} set to {func_set}, F={frequency} Hz, Vpp={amplitude} V, Offs={offset} V, State={'ON' if enable else 'OFF'}")
+            return True
+        except Exception as e:
+            self._logger.error(f"Failed to configure WGEN{generator}: {e}")
+            return False
