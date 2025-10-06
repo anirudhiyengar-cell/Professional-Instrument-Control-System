@@ -512,17 +512,37 @@ class TrulyResponsiveAutomationGUI:
         self.info_text.grid(row=1, column=0, columnspan=6, sticky='ew', pady=(2, 0))
 
     def create_channel_config_frame(self, parent, row):
-        """Create ULTRA-COMPACT channel configuration"""
+        """
+        Create channel configuration frame with multi-channel selection support.
+        
+        Allows users to select multiple channels for simultaneous data acquisition.
+        Each channel can be independently enabled/disabled using checkboxes.
+        Checked channels will be used for both acquisition and configuration.
+        """
         config_frame = ttk.LabelFrame(parent, text="Channel Config", padding="3")
         config_frame.grid(row=row, column=0, sticky='ew', pady=(0, 2))
 
         # Single row with all controls
         col = 0
 
-        ttk.Label(config_frame, text="Ch:", font=('Arial', 8)).grid(row=0, column=col, sticky='w')
+        # Multi-channel selection with checkboxes
+        ttk.Label(config_frame, text="Select:", font=('Arial', 8, 'bold')).grid(row=0, column=col, sticky='w')
         col += 1
-        self.channel_var = tk.IntVar(value=1)
-        ttk.Combobox(config_frame, textvariable=self.channel_var, values=[1, 2, 3, 4], width=3, state='readonly', font=('Arial', 8)).grid(row=0, column=col, padx=(0, 8))
+        
+        # Create checkbox variables for each channel (1-4)
+        # Each checkbox will control channel display on/off on the oscilloscope
+        self.channel_enable_vars = {}
+        for ch in [1, 2, 3, 4]:
+            var = tk.BooleanVar(value=(ch == 1))  # Channel 1 enabled by default
+            self.channel_enable_vars[ch] = var
+            # Add callback to toggle channel display when checkbox changes
+            var.trace_add('write', lambda *args, channel=ch: self.toggle_channel_display(channel))
+            ttk.Checkbutton(config_frame, text=f"Ch{ch}", variable=var, 
+                          style='TCheckbutton').grid(row=0, column=col, padx=2)
+            col += 1
+        
+        # Add separator
+        ttk.Separator(config_frame, orient='vertical').grid(row=0, column=col, sticky='ns', padx=8)
         col += 1
 
         ttk.Label(config_frame, text="V/div:", font=('Arial', 8)).grid(row=0, column=col, sticky='w')
@@ -787,6 +807,53 @@ class TrulyResponsiveAutomationGUI:
         except:
             pass
 
+    def get_selected_channels(self):
+        """
+        Get list of channels that are currently enabled for acquisition.
+        
+        Returns:
+            List of channel numbers (1-4) that have their checkboxes checked.
+            Returns empty list if no channels are selected.
+        """
+        selected = []
+        for ch, var in self.channel_enable_vars.items():
+            if var.get():  # If checkbox is checked
+                selected.append(ch)
+        return sorted(selected)  # Return in ascending order
+
+    def toggle_channel_display(self, channel):
+        """
+        Toggle channel display on/off on the oscilloscope.
+        
+        When a channel checkbox is checked/unchecked, this automatically
+        turns the channel display on/off on the oscilloscope screen.
+        This ensures screenshots only show the channels you want.
+        
+        Args:
+            channel: Channel number (1-4) to toggle
+        """
+        # Only execute if oscilloscope is connected
+        if not self.oscilloscope or not self.oscilloscope.is_connected:
+            return
+        
+        try:
+            # Get the current state of the checkbox
+            is_enabled = self.channel_enable_vars[channel].get()
+            
+            # Send SCPI command to turn channel display on or off
+            # :CHANnel<n>:DISPlay <state> where state is 1 (ON) or 0 (OFF)
+            state = 1 if is_enabled else 0
+            command = f":CHANnel{channel}:DISPlay {state}"
+            
+            self.oscilloscope._scpi_wrapper.write(command)
+            
+            # Log the action
+            action = "enabled" if is_enabled else "disabled"
+            self.log_message(f"Ch{channel} display {action}")
+            
+        except Exception as e:
+            self.log_message(f"Error toggling Ch{channel} display: {e}", "ERROR")
+
     def disable_operation_buttons(self):
         """Disable operation buttons"""
         buttons = [self.screenshot_btn, self.acquire_data_btn, self.export_csv_btn,
@@ -897,26 +964,52 @@ class TrulyResponsiveAutomationGUI:
             self.log_message(f"Test error: {e}", "ERROR")
 
     def configure_channel(self):
-        """Configure channel"""
+        """
+        Configure all selected channels with the specified settings.
+        
+        Applies the V/div, Offset, Coupling, and Probe settings to all
+        channels that are currently checked in the GUI.
+        """
         def config_thread():
             try:
-                channel = self.channel_var.get()
+                # Get selected channels
+                selected_channels = self.get_selected_channels()
+                
+                if not selected_channels:
+                    self.status_queue.put(("error", "No channels selected. Please check at least one channel."))
+                    return
+                
+                # Get configuration parameters
                 v_scale = self.v_scale_var.get()
                 v_offset = self.v_offset_var.get()
                 coupling = self.coupling_var.get()
                 probe = self.probe_var.get()
 
-                self.update_status(f"Configuring Ch{channel}...")
-                self.log_message(f"Ch{channel}: {v_scale}V/div, {v_offset}V, {coupling}, {probe}x")
+                self.update_status(f"Configuring {len(selected_channels)} channel(s)...")
+                self.log_message(f"Configuring channels {selected_channels}: {v_scale}V/div, {v_offset}V, {coupling}, {probe}x")
 
-                success = self.oscilloscope.configure_channel(
-                    channel=channel, vertical_scale=v_scale, vertical_offset=v_offset,
-                    coupling=coupling, probe_attenuation=probe)
+                # Configure each selected channel
+                success_count = 0
+                for channel in selected_channels:
+                    self.log_message(f"Configuring Ch{channel}...")
+                    success = self.oscilloscope.configure_channel(
+                        channel=channel, vertical_scale=v_scale, vertical_offset=v_offset,
+                        coupling=coupling, probe_attenuation=probe)
 
-                if success:
-                    self.status_queue.put(("channel_configured", f"Ch{channel} configured"))
+                    if success:
+                        success_count += 1
+                        self.log_message(f"Ch{channel} configured successfully", "SUCCESS")
+                    else:
+                        self.log_message(f"Ch{channel} configuration failed", "ERROR")
+
+                # Send completion status
+                if success_count == len(selected_channels):
+                    self.status_queue.put(("channel_configured", f"All {success_count} channel(s) configured"))
+                elif success_count > 0:
+                    self.status_queue.put(("channel_configured", f"{success_count}/{len(selected_channels)} channel(s) configured"))
                 else:
-                    self.status_queue.put(("error", f"Ch{channel} config failed"))
+                    self.status_queue.put(("error", "All channel configurations failed"))
+                    
             except Exception as e:
                 self.status_queue.put(("error", f"Config error: {str(e)}"))
 
@@ -956,17 +1049,46 @@ class TrulyResponsiveAutomationGUI:
             messagebox.showerror("Error", "Not connected")
 
     def acquire_data(self):
-        """Acquire data"""
+        """
+        Acquire waveform data from selected channels.
+        
+        Acquires data from all channels that are enabled (checked) in the GUI.
+        If multiple channels are selected, data is acquired sequentially from each.
+        All acquired data is stored in self.last_acquired_data as a dictionary
+        keyed by channel number.
+        """
         def acquire_thread():
             try:
-                self.update_status("Acquiring data...")
-                self.log_message(f"Acquiring Ch{self.channel_var.get()}...")
-
-                data = self.data_acquisition.acquire_waveform_data(self.channel_var.get())
-                if data:
-                    self.status_queue.put(("data_acquired", data))
+                # Get list of selected channels
+                selected_channels = self.get_selected_channels()
+                
+                if not selected_channels:
+                    self.status_queue.put(("error", "No channels selected. Please check at least one channel."))
+                    return
+                
+                self.update_status(f"Acquiring data from {len(selected_channels)} channel(s)...")
+                self.log_message(f"Acquiring data from channels: {selected_channels}")
+                
+                # Dictionary to store data from all channels
+                all_channel_data = {}
+                
+                # Acquire data from each selected channel
+                for channel in selected_channels:
+                    self.log_message(f"Acquiring Ch{channel}...")
+                    data = self.data_acquisition.acquire_waveform_data(channel)
+                    
+                    if data:
+                        all_channel_data[channel] = data
+                        self.log_message(f"Ch{channel}: {data['points_count']} points acquired", "SUCCESS")
+                    else:
+                        self.log_message(f"Ch{channel}: Acquisition failed", "ERROR")
+                
+                # Send all acquired data to GUI thread
+                if all_channel_data:
+                    self.status_queue.put(("data_acquired", all_channel_data))
                 else:
-                    self.status_queue.put(("error", "Data acquisition failed"))
+                    self.status_queue.put(("error", "Data acquisition failed for all channels"))
+                    
             except Exception as e:
                 self.status_queue.put(("error", f"Acquire error: {str(e)}"))
 
@@ -976,7 +1098,12 @@ class TrulyResponsiveAutomationGUI:
             messagebox.showerror("Error", "Not connected")
 
     def export_csv(self):
-        """Export CSV"""
+        """
+        Export acquired waveform data to CSV files.
+        
+        If multiple channels were acquired, creates a separate CSV file for each channel.
+        Each file is named with the channel number and timestamp.
+        """
         if not hasattr(self, 'last_acquired_data') or not self.last_acquired_data:
             messagebox.showwarning("Warning", "No data. Acquire first.")
             return
@@ -985,12 +1112,27 @@ class TrulyResponsiveAutomationGUI:
             try:
                 self.update_status("Exporting CSV...")
                 self.log_message("Exporting CSV...")
+                
+                exported_files = []
+                
+                # Check if data is a dictionary (multi-channel) or single channel data
+                if isinstance(self.last_acquired_data, dict) and 'channel' not in self.last_acquired_data:
+                    # Multi-channel data: dictionary keyed by channel number
+                    for channel, data in self.last_acquired_data.items():
+                        filename = self.data_acquisition.export_to_csv(
+                            data, custom_path=self.data_path_var.get())
+                        if filename:
+                            exported_files.append(filename)
+                            self.log_message(f"Ch{channel} CSV exported: {Path(filename).name}", "SUCCESS")
+                else:
+                    # Single channel data (backward compatibility)
+                    filename = self.data_acquisition.export_to_csv(
+                        self.last_acquired_data, custom_path=self.data_path_var.get())
+                    if filename:
+                        exported_files.append(filename)
 
-                filename = self.data_acquisition.export_to_csv(
-                    self.last_acquired_data, custom_path=self.data_path_var.get())
-
-                if filename:
-                    self.status_queue.put(("csv_exported", filename))
+                if exported_files:
+                    self.status_queue.put(("csv_exported", exported_files))
                 else:
                     self.status_queue.put(("error", "CSV export failed"))
             except Exception as e:
@@ -999,7 +1141,12 @@ class TrulyResponsiveAutomationGUI:
         threading.Thread(target=export_thread, daemon=True).start()
 
     def generate_plot(self):
-        """Generate plot"""
+        """
+        Generate plots for acquired waveform data.
+        
+        If multiple channels were acquired, creates a separate plot for each channel.
+        Each plot is saved with the channel number and timestamp in the filename.
+        """
         if not hasattr(self, 'last_acquired_data') or not self.last_acquired_data:
             messagebox.showwarning("Warning", "No data. Acquire first.")
             return
@@ -1008,13 +1155,34 @@ class TrulyResponsiveAutomationGUI:
             try:
                 self.update_status("Generating plot...")
                 self.log_message("Generating plot...")
-
+                
+                generated_plots = []
                 custom_title = self.graph_title_var.get().strip() or None
-                filename = self.data_acquisition.generate_waveform_plot(
-                    self.last_acquired_data, custom_path=self.graph_path_var.get(), plot_title=custom_title)
 
-                if filename:
-                    self.status_queue.put(("plot_generated", filename))
+                # Check if data is a dictionary (multi-channel) or single channel data
+                if isinstance(self.last_acquired_data, dict) and 'channel' not in self.last_acquired_data:
+                    # Multi-channel data: dictionary keyed by channel number
+                    for channel, data in self.last_acquired_data.items():
+                        # Create custom title for each channel if base title provided
+                        if custom_title:
+                            channel_title = f"{custom_title} - Channel {channel}"
+                        else:
+                            channel_title = None
+                            
+                        filename = self.data_acquisition.generate_waveform_plot(
+                            data, custom_path=self.graph_path_var.get(), plot_title=channel_title)
+                        if filename:
+                            generated_plots.append(filename)
+                            self.log_message(f"Ch{channel} plot generated: {Path(filename).name}", "SUCCESS")
+                else:
+                    # Single channel data (backward compatibility)
+                    filename = self.data_acquisition.generate_waveform_plot(
+                        self.last_acquired_data, custom_path=self.graph_path_var.get(), plot_title=custom_title)
+                    if filename:
+                        generated_plots.append(filename)
+
+                if generated_plots:
+                    self.status_queue.put(("plot_generated", generated_plots))
                 else:
                     self.status_queue.put(("error", "Plot failed"))
             except Exception as e:
@@ -1024,13 +1192,13 @@ class TrulyResponsiveAutomationGUI:
 
     def run_full_automation(self):
         """
-        Execute the complete automation workflow in sequence.
+        Execute the complete automation workflow in sequence for all selected channels.
         
         Performs all oscilloscope operations in a single automated sequence:
         1. Capture screenshot of oscilloscope display
-        2. Acquire waveform data from selected channel
-        3. Export data to CSV file
-        4. Generate plot with statistics
+        2. Acquire waveform data from all selected channels
+        3. Export data to CSV files (one per channel)
+        4. Generate plots with statistics (one per channel)
         
         All operations run in a background thread to keep the GUI responsive.
         Results are saved to user-specified directories with timestamped filenames.
@@ -1039,10 +1207,14 @@ class TrulyResponsiveAutomationGUI:
             """Worker thread function for full automation sequence."""
             try:
                 # Get user-configured parameters
-                channel = self.channel_var.get()
+                selected_channels = self.get_selected_channels()
+                if not selected_channels:
+                    self.status_queue.put(("error", "No channels selected. Please check at least one channel."))
+                    return
+                    
                 custom_title = self.graph_title_var.get().strip() or None
 
-                self.log_message("Starting full automation...")
+                self.log_message(f"Starting full automation for channels: {selected_channels}...")
 
                 # Step 1: Capture screenshot of oscilloscope display
                 self.update_status("Step 1/4: Screenshot...")
@@ -1059,30 +1231,62 @@ class TrulyResponsiveAutomationGUI:
                         shutil.move(str(original_path), str(new_path))
                         screenshot_file = str(new_path)
 
-                # Step 2: Acquire waveform data from the oscilloscope
-                self.update_status("Step 2/4: Acquiring data...")
-                self.log_message("Step 2/4: Acquiring data...")
-                data = self.data_acquisition.acquire_waveform_data(channel)
-                if not data:
-                    raise Exception("Data acquisition failed")
+                # Step 2: Acquire waveform data from all selected channels
+                self.update_status(f"Step 2/4: Acquiring data from {len(selected_channels)} channel(s)...")
+                self.log_message(f"Step 2/4: Acquiring data from {len(selected_channels)} channel(s)...")
+                
+                all_channel_data = {}
+                for channel in selected_channels:
+                    self.log_message(f"Acquiring Ch{channel}...")
+                    data = self.data_acquisition.acquire_waveform_data(channel)
+                    if data:
+                        all_channel_data[channel] = data
+                        self.log_message(f"Ch{channel}: {data['points_count']} points acquired", "SUCCESS")
+                    else:
+                        self.log_message(f"Ch{channel}: Acquisition failed", "ERROR")
+                
+                if not all_channel_data:
+                    raise Exception("Data acquisition failed for all channels")
 
-                # Step 3: Export acquired data to CSV format
+                # Step 3: Export acquired data to CSV format (one file per channel)
                 self.update_status("Step 3/4: Exporting CSV...")
                 self.log_message("Step 3/4: Exporting CSV...")
-                csv_file = self.data_acquisition.export_to_csv(data, custom_path=self.data_path_var.get())
-                if not csv_file:
-                    raise Exception("CSV export failed")
+                csv_files = []
+                for channel, data in all_channel_data.items():
+                    csv_file = self.data_acquisition.export_to_csv(data, custom_path=self.data_path_var.get())
+                    if csv_file:
+                        csv_files.append(csv_file)
+                        self.log_message(f"Ch{channel} CSV exported", "SUCCESS")
+                    else:
+                        self.log_message(f"Ch{channel} CSV export failed", "ERROR")
 
-                # Step 4: Generate plot with statistics
-                self.update_status("Step 4/4: Generating plot...")
-                self.log_message("Step 4/4: Generating plot...")
-                plot_file = self.data_acquisition.generate_waveform_plot(
-                    data, custom_path=self.graph_path_var.get(), plot_title=custom_title)
-                if not plot_file:
-                    raise Exception("Plot failed")
+                # Step 4: Generate plots with statistics (one plot per channel)
+                self.update_status("Step 4/4: Generating plots...")
+                self.log_message("Step 4/4: Generating plots...")
+                plot_files = []
+                for channel, data in all_channel_data.items():
+                    # Create custom title for each channel if base title provided
+                    if custom_title:
+                        channel_title = f"{custom_title} - Channel {channel}"
+                    else:
+                        channel_title = None
+                        
+                    plot_file = self.data_acquisition.generate_waveform_plot(
+                        data, custom_path=self.graph_path_var.get(), plot_title=channel_title)
+                    if plot_file:
+                        plot_files.append(plot_file)
+                        self.log_message(f"Ch{channel} plot generated", "SUCCESS")
+                    else:
+                        self.log_message(f"Ch{channel} plot generation failed", "ERROR")
 
                 # Package all results and send to GUI thread
-                results = {'screenshot': screenshot_file, 'csv': csv_file, 'plot': plot_file, 'data': data}
+                results = {
+                    'screenshot': screenshot_file, 
+                    'csv': csv_files, 
+                    'plot': plot_files, 
+                    'data': all_channel_data,
+                    'channels': selected_channels
+                }
                 self.status_queue.put(("full_automation_complete", results))
 
             except Exception as e:
@@ -1161,15 +1365,34 @@ class TrulyResponsiveAutomationGUI:
 
                 elif status_type == "data_acquired":
                     self.last_acquired_data = data
-                    self.log_message(f"Data acquired: {data['points_count']} points Ch{data['channel']}", "SUCCESS")
+                    # Handle both single channel and multi-channel data
+                    if isinstance(data, dict) and 'channel' not in data:
+                        # Multi-channel data
+                        total_points = sum(ch_data['points_count'] for ch_data in data.values())
+                        self.log_message(f"Data acquired: {len(data)} channels, {total_points} total points", "SUCCESS")
+                    else:
+                        # Single channel data
+                        self.log_message(f"Data acquired: {data['points_count']} points Ch{data['channel']}", "SUCCESS")
                     self.update_status("Data acquired")
 
                 elif status_type == "csv_exported":
-                    self.log_message(f"CSV exported: {Path(data).name}", "SUCCESS")
+                    # Handle both single file and multiple files
+                    if isinstance(data, list):
+                        for filepath in data:
+                            self.log_message(f"CSV exported: {Path(filepath).name}", "SUCCESS")
+                        self.log_message(f"Total: {len(data)} CSV file(s) exported", "SUCCESS")
+                    else:
+                        self.log_message(f"CSV exported: {Path(data).name}", "SUCCESS")
                     self.update_status("CSV exported")
 
                 elif status_type == "plot_generated":
-                    self.log_message(f"Plot generated: {Path(data).name}", "SUCCESS")
+                    # Handle both single plot and multiple plots
+                    if isinstance(data, list):
+                        for filepath in data:
+                            self.log_message(f"Plot generated: {Path(filepath).name}", "SUCCESS")
+                        self.log_message(f"Total: {len(data)} plot(s) generated", "SUCCESS")
+                    else:
+                        self.log_message(f"Plot generated: {Path(data).name}", "SUCCESS")
                     self.update_status("Plot generated")
 
                 elif status_type == "channel_configured":
@@ -1178,13 +1401,36 @@ class TrulyResponsiveAutomationGUI:
 
                 elif status_type == "full_automation_complete":
                     self.last_acquired_data = data['data']
-                    self.log_message("Full automation completed successfully!", "SUCCESS")
+                    channels = data.get('channels', [])
+                    self.log_message(f"Full automation completed for {len(channels)} channel(s)!", "SUCCESS")
                     self.log_message(f"Screenshot: {Path(data['screenshot']).name}", "SUCCESS")
-                    self.log_message(f"CSV: {Path(data['csv']).name}", "SUCCESS")
-                    self.log_message(f"Plot: {Path(data['plot']).name}", "SUCCESS")
+                    
+                    # Log CSV files
+                    if isinstance(data['csv'], list):
+                        for csv_file in data['csv']:
+                            self.log_message(f"CSV: {Path(csv_file).name}", "SUCCESS")
+                    else:
+                        self.log_message(f"CSV: {Path(data['csv']).name}", "SUCCESS")
+                    
+                    # Log plot files
+                    if isinstance(data['plot'], list):
+                        for plot_file in data['plot']:
+                            self.log_message(f"Plot: {Path(plot_file).name}", "SUCCESS")
+                    else:
+                        self.log_message(f"Plot: {Path(data['plot']).name}", "SUCCESS")
+                    
                     self.update_status("Automation complete")
 
-                    messagebox.showinfo("Complete!", f"Full automation complete!\n\nScreenshot: {Path(data['screenshot']).name}\nCSV: {Path(data['csv']).name}\nPlot: {Path(data['plot']).name}")
+                    # Create summary message for dialog
+                    csv_count = len(data['csv']) if isinstance(data['csv'], list) else 1
+                    plot_count = len(data['plot']) if isinstance(data['plot'], list) else 1
+                    
+                    messagebox.showinfo("Complete!", 
+                        f"Full automation complete!\n\n"
+                        f"Channels: {', '.join(map(str, channels))}\n"
+                        f"Screenshot: 1 file\n"
+                        f"CSV files: {csv_count}\n"
+                        f"Plots: {plot_count}")
 
         except queue.Empty:
             pass
