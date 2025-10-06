@@ -1055,7 +1055,7 @@ class EnhancedInstrumentAutomationSystem:
                         time.sleep(0.5)  # Allow settings to stabilize
                         
                         # Capture screenshot with timestamp
-                        timestamp = datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
+                        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                         screenshot_filename = f"test_measurement_ch{selected_channel}_{timestamp}.png"
                         screenshot_path = self._oscilloscope.capture_screenshot(screenshot_filename, "PNG", True)
                         
