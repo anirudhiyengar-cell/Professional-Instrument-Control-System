@@ -1,138 +1,219 @@
 """
 Keysight Oscilloscope Automation Application
-Professional automation interface for capturing screenshots, exporting data, and generating graphs
-Built using the instrument_control package
+
+This module provides a comprehensive GUI application for automating Keysight oscilloscope operations.
+It includes features for data acquisition, waveform analysis, screenshot capture, and file export.
+
+Key Features:
+- Responsive GUI layout that adapts to window resizing
+- VISA-based instrument communication
+- Multi-threaded operations to prevent UI freezing
+- Customizable save locations for data, graphs, and screenshots
+- Real-time logging with color-coded messages
+- Full automation workflow (screenshot + data + CSV + plot)
+
+Author: Professional Instrumentation Control System
+Version: 2.0
 """
 
-# These lines import necessary libraries for the program to work.
+# Standard library imports for system operations and data structures
+import sys
+import logging
+from pathlib import Path
+from typing import Optional, Dict, Any, List, Tuple
+import os
+import threading
+import queue
+from datetime import datetime
 
-import sys  # Used for system-level operations, like exiting the program.
-import logging  # Used for logging events and errors.
-from pathlib import Path  # Helps in handling file paths in a way that works on any operating system.
-from typing import Optional, Dict, Any, List, Tuple  # Provides type hints for better code readability.
-import tkinter as tk  # This is the main library for creating the graphical user interface (GUI).
-from tkinter import ttk, messagebox, filedialog, scrolledtext  # These are additional components for the GUI.
-import pandas as pd  # A powerful library for data manipulation, used here to create CSV files.
-import matplotlib.pyplot as plt  # Used for creating plots and graphs.
-import numpy as np  # A library for numerical operations, especially with arrays of data.
-from datetime import datetime  # Used to get the current date and time, for timestamps in filenames.
-import threading  # Allows running multiple tasks at the same time, so the GUI doesn't freeze.
-import queue  # A tool to safely pass messages between different threads.
+# Third-party imports for GUI, data processing, and visualization
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog, scrolledtext
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
 
-# This section tries to import the custom modules needed to control the oscilloscope.
-# If these modules are not found, it prints an error and exits the program.
+# Import custom instrument control modules
+# These modules handle low-level SCPI communication with the oscilloscope
 try:
-    # Imports the main oscilloscope control class and a custom error class.
     from instrument_control.keysight_oscilloscope import KeysightDSOX6004A, KeysightDSOX6004AError
-    # Imports a helper class that sends commands to the instrument.
     from instrument_control.scpi_wrapper import SCPIWrapper
 except ImportError as e:
-    # This code runs if the imports fail.
     print(f"Error importing instrument control modules: {e}")
     print("Please ensure the instrument_control package is in your Python path")
-    sys.exit(1)  # Exits the program.
+    sys.exit(1)
 
-
-# This class handles all tasks related to getting data from the oscilloscope.
 class OscilloscopeDataAcquisition:
-    """Manages acquiring, exporting, and plotting waveform data from the oscilloscope."""
+    """
+    Data Acquisition Handler for Oscilloscope Operations
+    
+    This class manages all data acquisition, export, and visualization operations
+    for the oscilloscope. It provides methods to:
+    - Acquire raw waveform data from oscilloscope channels
+    - Export data to CSV format with metadata
+    - Generate publication-quality plots with statistics
+    
+    The class maintains default directories for organizing output files and supports
+    custom save locations for flexibility.
+    """
 
-    # This is the constructor method. It runs when a new OscilloscopeDataAcquisition object is created.
     def __init__(self, oscilloscope_instance):
-        # Stores the oscilloscope object so it can be used by other methods in this class.
+        """
+        Initialize the data acquisition handler.
+        
+        Args:
+            oscilloscope_instance: Connected KeysightDSOX6004A oscilloscope object
+        """
+        # Store reference to the oscilloscope instance for SCPI communication
         self.scope = oscilloscope_instance
-        # Sets up a logger to record events and errors for this class.
+        
+        # Create a logger instance for this class to track operations
         self._logger = logging.getLogger(f'{self.__class__.__name__}')
+        
+        # Define default output directories relative to current working directory
+        self.default_data_dir = Path.cwd() / "data"
+        self.default_graph_dir = Path.cwd() / "graphs"
+        self.default_screenshot_dir = Path.cwd() / "screenshots"
 
-    # This method gets the waveform (the signal shape) from a specific channel on the oscilloscope.
     def acquire_waveform_data(self, channel: int, max_points: int = 62500) -> Optional[Dict[str, Any]]:
         """
-        Acquires waveform data from the specified channel.
-        Returns a dictionary containing the time and voltage data, plus metadata.
+        Acquire waveform data from a specified oscilloscope channel.
+        
+        This method configures the oscilloscope for data acquisition, retrieves the
+        raw waveform data, and converts it to voltage and time arrays using the
+        oscilloscope's scaling parameters.
+        
+        Args:
+            channel: Channel number to acquire data from (1-4)
+            max_points: Maximum number of data points to acquire (default: 62500)
+            
+        Returns:
+            Dictionary containing waveform data and metadata, or None if acquisition fails.
+            Dictionary keys:
+                - 'channel': Channel number
+                - 'time': List of time values in seconds
+                - 'voltage': List of voltage values in volts
+                - 'sample_rate': Sampling rate in Hz
+                - 'time_increment': Time between samples in seconds
+                - 'voltage_increment': Voltage resolution in volts
+                - 'points_count': Number of data points acquired
+                - 'acquisition_time': ISO format timestamp of acquisition
         """
-        # First, check if the oscilloscope is connected. If not, log an error and stop.
         if not self.scope.is_connected:
             self._logger.error("Cannot acquire data: oscilloscope not connected")
             return None
 
         try:
-            # These commands configure the oscilloscope to send the waveform data.
-            self.scope._scpi_wrapper.write(f":WAVeform:SOURce CHANnel{channel}")  # Select the channel.
-            self.scope._scpi_wrapper.write(":WAVeform:FORMat BYTE")  # Set the data format.
-            self.scope._scpi_wrapper.write(":WAVeform:POINts:MODE RAW")  # Get the raw data points.
-            self.scope._scpi_wrapper.write(f":WAVeform:POINts {max_points}")  # Set how many data points to get.
+            # Configure oscilloscope waveform source to the specified channel
+            self.scope._scpi_wrapper.write(f":WAVeform:SOURce CHANnel{channel}")
+            
+            # Set data format to BYTE (8-bit unsigned integers) for efficient transfer
+            self.scope._scpi_wrapper.write(":WAVeform:FORMat BYTE")
+            
+            # Use RAW mode to get all available data points from acquisition memory
+            self.scope._scpi_wrapper.write(":WAVeform:POINts:MODE RAW")
+            
+            # Set the maximum number of points to retrieve
+            self.scope._scpi_wrapper.write(f":WAVeform:POINts {max_points}")
 
-            # This command gets metadata (the "preamble") about the waveform, which is needed to correctly interpret the data.
+            # Query the waveform preamble which contains scaling information
+            # The preamble is a comma-separated list of 10 values describing the waveform
             preamble = self.scope._scpi_wrapper.query(":WAVeform:PREamble?")
-            preamble_parts = preamble.split(',')  # The preamble is a comma-separated string.
+            preamble_parts = preamble.split(',')
 
-            # These lines extract scaling factors from the preamble to convert raw data into actual voltage and time values.
-            y_increment = float(preamble_parts[7])  # Voltage step per data point.
-            y_origin = float(preamble_parts[8])     # Voltage offset.
-            y_reference = float(preamble_parts[9])  # Reference voltage level.
-            x_increment = float(preamble_parts[4])  # Time step per data point.
-            x_origin = float(preamble_parts[5])     # Time offset.
+            # Extract scaling factors from preamble for converting raw data to real units
+            # y_increment: voltage value per ADC count
+            y_increment = float(preamble_parts[7])
+            # y_origin: voltage at ADC reference point
+            y_origin = float(preamble_parts[8])
+            # y_reference: ADC reference value (typically 0)
+            y_reference = float(preamble_parts[9])
+            # x_increment: time between consecutive data points
+            x_increment = float(preamble_parts[4])
+            # x_origin: time of first data point
+            x_origin = float(preamble_parts[5])
 
-            # This command requests the actual waveform data from the oscilloscope.
+            # Retrieve the actual waveform data as binary values (unsigned bytes)
             raw_data = self.scope._scpi_wrapper.query_binary_values(":WAVeform:DATA?", datatype='B')
 
-            # This line converts the raw data from the scope into meaningful voltage values using the scaling factors.
+            # Convert raw ADC values to actual voltage using the formula:
+            # Voltage = (ADC_value - reference) * increment + origin
             voltage_data = [(value - y_reference) * y_increment + y_origin for value in raw_data]
-
-            # This line creates a corresponding time value for each voltage point.
+            
+            # Generate time array: each point's time = origin + (index * increment)
             time_data = [x_origin + (i * x_increment) for i in range(len(voltage_data))]
 
             self._logger.info(f"Successfully acquired {len(voltage_data)} points from channel {channel}")
 
-            # The method returns a dictionary containing all the useful information.
+            # Return structured dictionary with all waveform data and metadata
             return {
                 'channel': channel,
-                'time': time_data,  # The array of time values.
-                'voltage': voltage_data,  # The array of voltage values.
-                'sample_rate': 1.0 / x_increment,  # How many samples were taken per second.
-                'time_increment': x_increment,  # The time between each sample.
-                'voltage_increment': y_increment,  # The voltage resolution.
-                'points_count': len(voltage_data),  # The total number of data points.
-                'acquisition_time': datetime.now().isoformat()  # When the data was acquired.
+                'time': time_data,
+                'voltage': voltage_data,
+                'sample_rate': 1.0 / x_increment,  # Calculate sampling rate from time increment
+                'time_increment': x_increment,
+                'voltage_increment': y_increment,
+                'points_count': len(voltage_data),
+                'acquisition_time': datetime.now().isoformat()
             }
 
         except Exception as e:
-            # If anything goes wrong, log the error and return nothing.
             self._logger.error(f"Failed to acquire waveform data from channel {channel}: {e}")
             return None
 
-    # This method saves the acquired waveform data to a CSV (Comma-Separated Values) file.
-    def export_to_csv(self, waveform_data: Dict[str, Any], filename: Optional[str] = None) -> Optional[str]:
-        """Exports the provided waveform data into a CSV file with metadata."""
-        # If there's no data to export, log an error and stop.
+    def export_to_csv(self, waveform_data: Dict[str, Any], custom_path: Optional[str] = None, 
+                      filename: Optional[str] = None) -> Optional[str]:
+        """
+        Export waveform data to CSV file with metadata header.
+        
+        Creates a CSV file containing time and voltage data with a comprehensive
+        metadata header that includes acquisition parameters. This format is suitable
+        for post-processing in spreadsheet applications or data analysis tools.
+        
+        Args:
+            waveform_data: Dictionary containing waveform data from acquire_waveform_data()
+            custom_path: Optional custom directory path for saving the file
+            filename: Optional custom filename (will auto-generate if not provided)
+            
+        Returns:
+            Full path to the saved CSV file as a string, or None if export fails
+        """
         if not waveform_data:
             self._logger.error("No waveform data to export")
             return None
 
         try:
-            # Make sure the output directory for data files exists.
-            self.scope.setup_output_directories()
+            # Determine the save directory: use custom path if provided, otherwise use default
+            if custom_path:
+                save_dir = Path(custom_path)
+            else:
+                save_dir = self.default_data_dir
+                # Ensure default output directories exist
+                self.scope.setup_output_directories()
 
-            # If no filename is provided, create one automatically with a timestamp.
+            # Create the directory if it doesn't exist (including parent directories)
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+            # Generate a timestamped filename if not provided by user
             if filename is None:
                 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                 filename = f"waveform_ch{waveform_data['channel']}_{timestamp}.csv"
 
-            # Ensure the filename ends with .csv.
+            # Ensure filename has .csv extension
             if not filename.endswith('.csv'):
                 filename += '.csv'
 
-            # Create the full path to the file.
-            filepath = self.scope.data_dir / filename
+            # Construct full file path
+            filepath = save_dir / filename
 
-            # Use the pandas library to organize the data into a table (DataFrame).
+            # Create a pandas DataFrame with labeled columns for time and voltage
             df = pd.DataFrame({
                 'Time (s)': waveform_data['time'],
                 'Voltage (V)': waveform_data['voltage']
             })
 
-            # Open the file and write the metadata as comments at the top.
-            # The '#' makes these lines comments, so they won't be read as data by spreadsheet programs.
+            # Write metadata header as comments (lines starting with #)
+            # This preserves important acquisition parameters with the data
             with open(filepath, 'w') as f:
                 f.write(f"# Oscilloscope Waveform Data\n")
                 f.write(f"# Channel: {waveform_data['channel']}\n")
@@ -143,57 +224,78 @@ class OscilloscopeDataAcquisition:
                 f.write(f"# Voltage Increment: {waveform_data['voltage_increment']:.2e} V\n")
                 f.write("\n")
 
-            # Append the actual data to the file, after the metadata comments.
+            # Append the actual data to the file (mode='a' for append)
             df.to_csv(filepath, mode='a', index=False)
-
             self._logger.info(f"CSV exported successfully: {filepath}")
-            return str(filepath)  # Return the path of the created file.
+            return str(filepath)
 
         except Exception as e:
-            # If anything goes wrong, log the error and return nothing.
             self._logger.error(f"Failed to export CSV: {e}")
             return None
 
-    # This method creates a plot of the waveform data and saves it as an image file (e.g., .png).
-    def generate_waveform_plot(self, waveform_data: Dict[str, Any], filename: Optional[str] = None, 
-                             plot_title: Optional[str] = None) -> Optional[str]:
-        """Generates and saves a plot of the waveform data."""
-        # If there's no data, log an error and stop.
+    def generate_waveform_plot(self, waveform_data: Dict[str, Any], custom_path: Optional[str] = None,
+                              filename: Optional[str] = None, plot_title: Optional[str] = None) -> Optional[str]:
+        """
+        Generate a publication-quality plot of waveform data with statistics.
+        
+        Creates a matplotlib figure showing the waveform with an embedded statistics box.
+        The plot includes voltage vs time, grid lines, and calculated statistics
+        (max, min, mean, RMS, standard deviation).
+        
+        Args:
+            waveform_data: Dictionary containing waveform data from acquire_waveform_data()
+            custom_path: Optional custom directory path for saving the plot
+            filename: Optional custom filename (will auto-generate if not provided)
+            plot_title: Optional custom title for the plot (auto-generates if not provided)
+            
+        Returns:
+            Full path to the saved plot file as a string, or None if generation fails
+        """
         if not waveform_data:
             self._logger.error("No waveform data to plot")
             return None
 
         try:
-            # Ensure the output directory for graphs exists.
-            self.scope.setup_output_directories()
+            # Determine the save directory: use custom path if provided, otherwise use default
+            if custom_path:
+                save_dir = Path(custom_path)
+            else:
+                save_dir = self.default_graph_dir
+                # Ensure default output directories exist
+                self.scope.setup_output_directories()
 
-            # If no filename is given, create one with a timestamp.
+            # Create the directory if it doesn't exist (including parent directories)
+            save_dir.mkdir(parents=True, exist_ok=True)
+
+            # Generate a timestamped filename if not provided by user
             if filename is None:
                 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                 filename = f"waveform_plot_ch{waveform_data['channel']}_{timestamp}.png"
 
-            # Make sure the filename has a valid image extension.
+            # Ensure filename has an image extension
             if not filename.lower().endswith(('.png', '.jpg', '.jpeg')):
                 filename += '.png'
 
-            # Create the full path for the plot image.
-            filepath = self.scope.graph_dir / filename
+            # Construct full file path
+            filepath = save_dir / filename
 
-            # Create the plot using matplotlib.
-            plt.figure(figsize=(12, 8))  # Set the size of the plot.
-            plt.plot(waveform_data['time'], waveform_data['voltage'], 'b-', linewidth=1)  # Plot time vs. voltage.
+            # Create a matplotlib figure with specified size (12x8 inches)
+            plt.figure(figsize=(12, 8))
+            
+            # Plot the waveform data: blue line with 1-pixel width
+            plt.plot(waveform_data['time'], waveform_data['voltage'], 'b-', linewidth=1)
 
-            # If no title is provided, create a default one.
+            # Set the plot title: use custom title if provided, otherwise auto-generate
             if plot_title is None:
                 plot_title = f"Oscilloscope Waveform - Channel {waveform_data['channel']}"
 
-            # Set the title and labels for the plot.
+            # Configure plot labels and styling
             plt.title(plot_title, fontsize=14, fontweight='bold')
             plt.xlabel('Time (s)', fontsize=12)
             plt.ylabel('Voltage (V)', fontsize=12)
-            plt.grid(True, alpha=0.3)  # Add a grid to the background.
+            plt.grid(True, alpha=0.3)  # Add semi-transparent grid for readability
 
-            # Calculate some basic statistics about the waveform.
+            # Calculate statistical measures of the waveform
             voltage_array = np.array(waveform_data['voltage'])
             stats_text = f"""Statistics:
 Max: {np.max(voltage_array):.3f} V
@@ -203,550 +305,925 @@ RMS: {np.sqrt(np.mean(voltage_array**2)):.3f} V
 Std Dev: {np.std(voltage_array):.3f} V
 Points: {len(voltage_array)}"""
 
-            # Add the statistics as a text box onto the plot.
-            plt.text(0.02, 0.98, stats_text, transform=plt.gca().transAxes, 
+            # Add statistics text box to the plot (top-left corner)
+            # transform=plt.gca().transAxes uses axes coordinates (0-1 range)
+            plt.text(0.02, 0.98, stats_text, transform=plt.gca().transAxes,
                     fontsize=10, verticalalignment='top',
                     bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
 
-            plt.tight_layout()  # Adjust the plot to fit everything nicely.
-            plt.savefig(filepath, dpi=300, bbox_inches='tight')  # Save the plot to the file.
-            plt.close()  # Close the plot to free up memory.
+            # Adjust layout to prevent label cutoff
+            plt.tight_layout()
+            
+            # Save the figure at high resolution (300 DPI) for publication quality
+            plt.savefig(filepath, dpi=300, bbox_inches='tight')
+            
+            # Close the figure to free memory
+            plt.close()
 
             self._logger.info(f"Plot saved successfully: {filepath}")
-            return str(filepath)  # Return the path of the saved plot.
+            return str(filepath)
 
         except Exception as e:
-            # If anything goes wrong, log the error and return nothing.
             self._logger.error(f"Failed to generate plot: {e}")
             return None
 
+class TrulyResponsiveAutomationGUI:
+    """
+    Main GUI Application for Oscilloscope Automation
+    
+    This class implements a professional Tkinter-based graphical user interface
+    for controlling and automating Keysight oscilloscope operations. The GUI
+    features a responsive layout that adapts to window resizing and provides
+    comprehensive controls for all oscilloscope functions.
+    
+    Key Features:
+    - Responsive grid-based layout that fills available space
+    - Multi-threaded operations to prevent UI freezing
+    - Real-time color-coded logging
+    - Customizable save locations for all output files
+    - Full automation workflow combining multiple operations
+    - Connection management with status indicators
+    
+    Architecture:
+    - Uses queue-based communication between worker threads and GUI thread
+    - Implements proper thread safety for UI updates
+    - Maintains separation between UI logic and instrument control
+    """
 
-# This class defines the entire Graphical User Interface (GUI) for the application.
-class AutomationGUI:
-    """Manages the graphical user interface for the oscilloscope automation tool."""
-
-    # The constructor method, which runs when the GUI is created.
     def __init__(self):
-        self.root = tk.Tk()  # Creates the main window of the application.
-        self.oscilloscope = None  # A variable to hold the oscilloscope object once connected.
-        self.data_acquisition = None  # A variable to hold the data acquisition object.
-        self.setup_logging()  # Sets up the logging system.
-        self.setup_gui()  # Calls the method to build all the GUI components.
-        self.status_queue = queue.Queue()  # Creates a queue for thread-safe communication.
-        self.check_status_updates()  # Starts a loop to check for updates from other threads.
+        """
+        Initialize the GUI application and all its components.
+        
+        Sets up the main window, initializes instance variables, configures
+        logging, creates the GUI layout, and starts the status update loop.
+        """
+        # Create the main Tkinter window
+        self.root = tk.Tk()
+        
+        # Initialize oscilloscope-related objects (will be set when connected)
+        self.oscilloscope = None  # KeysightDSOX6004A instance
+        self.data_acquisition = None  # OscilloscopeDataAcquisition instance
+        self.last_acquired_data = None  # Stores most recent waveform data
+        
+        # User preferences for save locations (can be customized via GUI)
+        self.save_locations = {
+            'data': str(Path.cwd() / "data"),
+            'graphs': str(Path.cwd() / "graphs"),
+            'screenshots': str(Path.cwd() / "screenshots")
+        }
 
-    # This method configures the logging system for the application.
+        # Configure application logging
+        self.setup_logging()
+        
+        # Build the GUI layout
+        self.setup_gui()
+        
+        # Create queue for thread-safe communication between worker threads and GUI
+        self.status_queue = queue.Queue()
+        
+        # Start the periodic status update checker
+        self.check_status_updates()
+
     def setup_logging(self):
-        """Configures the format and level for application-wide logging."""
+        """
+        Configure the logging system for the application.
+        
+        Sets up basic logging configuration with INFO level and a standard
+        format that includes timestamp, logger name, level, and message.
+        """
         logging.basicConfig(
-            level=logging.INFO,  # Set the minimum level of messages to log (e.g., INFO, WARNING, ERROR).
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'  # Define the format for log messages.
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         )
-        self.logger = logging.getLogger('OscilloscopeAutomation')  # Get a logger instance for the GUI.
-
-    # This method sets up the main structure of the GUI.
+        self.logger = logging.getLogger('OscilloscopeAutomation')
+    
     def setup_gui(self):
-        """Initializes and arranges all the main components of the GUI window."""
-        self.root.title("Keysight Oscilloscope Automation Suite")  # Set the title of the window.
-        self.root.geometry("900x700")  # Set the initial size of the window.
-        self.root.configure(bg='#f0f0f0')  # Set the background color.
+        """
+        Initialize the responsive GUI layout with all controls and widgets.
+        
+        Creates a grid-based layout that properly scales with window resizing.
+        The layout uses a hierarchical structure where the main frame contains
+        multiple sub-frames for different functional areas. Grid weights are
+        carefully configured to ensure the log area expands while control areas
+        remain fixed size.
+        """
+        # Set window title
+        self.root.title("Enhanced Keysight Oscilloscope Automation")
 
-        # Configure the visual style of the GUI elements.
+        # Set initial window size and background color
+        self.root.geometry("1000x650")  # Width x Height in pixels
+        self.root.configure(bg='#f5f5f5')  # Light gray background
+        self.root.minsize(800, 500)  # Minimum window dimensions
+
+        # Configure root window grid to allow expansion
+        # weight=1 means the column/row will expand to fill available space
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+
+        # Configure ttk styling for professional appearance
         self.style = ttk.Style()
-        self.style.theme_use('clam')  # Use a modern theme.
-        self.configure_styles()  # Apply custom styles for buttons and labels.
+        self.style.theme_use('clam')  # Use 'clam' theme for modern look
+        self.configure_styles()
 
-        # Create a main container frame for all other widgets.
-        main_frame = ttk.Frame(self.root, padding="20")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        # Create main container frame that fills the entire window
+        # padding="3" adds 3 pixels of internal spacing
+        # sticky='nsew' makes the frame expand in all directions (North, South, East, West)
+        main_frame = ttk.Frame(self.root, padding="3")
+        main_frame.grid(row=0, column=0, sticky='nsew', padx=3, pady=3)
 
-        # Add a title label at the top of the window.
-        title_label = ttk.Label(main_frame, text="Oscilloscope Automation Control Panel", 
+        # Configure main frame grid layout
+        # Column 0 will expand horizontally (weight=1)
+        main_frame.columnconfigure(0, weight=1)
+        
+        # Configure row weights to control vertical space distribution
+        # weight=0: Fixed size rows (controls)
+        # weight=1: Expandable row (log area)
+        main_frame.rowconfigure(0, weight=0)  # Title - fixed size
+        main_frame.rowconfigure(1, weight=0)  # Connection controls - fixed size  
+        main_frame.rowconfigure(2, weight=0)  # Channel configuration - fixed size
+        main_frame.rowconfigure(3, weight=0)  # File preferences - fixed size
+        main_frame.rowconfigure(4, weight=0)  # Operation buttons - fixed size
+        main_frame.rowconfigure(5, weight=1)  # Status/Log area - EXPANDABLE
+
+        # Create title label at the top
+        title_label = ttk.Label(main_frame, 
+                               text="Enhanced Keysight Oscilloscope Automation",
                                style='Title.TLabel')
-        title_label.pack(pady=(0, 20))
+        title_label.grid(row=0, column=0, pady=(0, 3), sticky='ew')
 
-        # Create the different sections of the GUI by calling other methods.
-        self.create_connection_frame(main_frame)  # Section for connection settings.
-        self.create_operations_frame(main_frame)  # Section for action buttons.
-        self.create_status_frame(main_frame)  # Section for status messages and logs.
+        # Create all functional sections in order
+        # Each section is placed in its designated row
+        self.create_connection_frame(main_frame, row=1)
+        self.create_channel_config_frame(main_frame, row=2)
+        self.create_file_preferences_frame(main_frame, row=3)
+        self.create_operations_frame(main_frame, row=4)
+        self.create_status_frame(main_frame, row=5)  # This expands to fill remaining space
 
-    # This method defines custom styles for various GUI widgets to make them look better.
+        # Store reference to main frame for potential future use
+        self.main_frame = main_frame
+
     def configure_styles(self):
-        """Defines custom fonts and colors for GUI elements like titles and buttons."""
-        # Style for the main title label.
-        self.style.configure('Title.TLabel', font=('Arial', 16, 'bold'), 
-                           foreground='#2c5aa0')
+        """
+        Configure custom ttk widget styles for consistent appearance.
+        
+        Defines custom styles for labels and buttons with specific fonts and colors.
+        These styles can be applied to widgets using the style parameter.
+        """
+        # Title label style: Large bold font with dark blue color
+        self.style.configure('Title.TLabel', 
+                            font=('Arial', 12, 'bold'), 
+                            foreground='#1a365d',  # Dark blue text
+                            background='#f5f5f5')  # Light gray background
+        
+        # Button styles with compact fonts for space efficiency
+        self.style.configure('Success.TButton', font=('Arial', 8))  # For successful operations
+        self.style.configure('Warning.TButton', font=('Arial', 8))  # For warning operations
+        self.style.configure('Info.TButton', font=('Arial', 8))     # For informational operations
+        self.style.configure('Primary.TButton', font=('Arial', 8))  # For primary actions
 
-        # Style for buttons that indicate a successful or primary action.
-        self.style.configure('Success.TButton', font=('Arial', 10, 'bold'))
-        self.style.map('Success.TButton', 
-                      background=[('active', '#28a745'), ('!active', '#198754')])
+    def create_connection_frame(self, parent, row):
+        """Create ULTRA-COMPACT connection controls"""
+        conn_frame = ttk.LabelFrame(parent, text="Connection", padding="3")
+        conn_frame.grid(row=row, column=0, sticky='ew', pady=(0, 2))
+        conn_frame.columnconfigure(1, weight=1)  # Entry field expands
 
-        # Style for buttons that indicate a warning or destructive action.
-        self.style.configure('Warning.TButton', font=('Arial', 10, 'bold'))
-        self.style.map('Warning.TButton',
-                      background=[('active', '#fd7e14'), ('!active', '#e36209')])
+        # SINGLE ROW layout
+        ttk.Label(conn_frame, text="VISA:", font=('Arial', 8)).grid(row=0, column=0, sticky='w', padx=(0, 3))
 
-        # Style for informational buttons.
-        self.style.configure('Info.TButton', font=('Arial', 10, 'bold'))
-        self.style.map('Info.TButton',
-                      background=[('active', '#17a2b8'), ('!active', '#138496')])
+        self.visa_address_var = tk.StringVar(value="USB0::0x0957::0x1780::MY65220169::INSTR")
+        self.visa_entry = ttk.Entry(conn_frame, textvariable=self.visa_address_var, font=('Arial', 8))
+        self.visa_entry.grid(row=0, column=1, sticky='ew', padx=(0, 3))
 
-    # This method creates the section of the GUI for managing the connection to the oscilloscope.
-    def create_connection_frame(self, parent):
-        """Creates the UI elements for setting the VISA address and connecting/disconnecting."""
-        conn_frame = ttk.LabelFrame(parent, text="Connection Settings", padding="15")
-        conn_frame.pack(fill=tk.X, pady=(0, 20))
+        self.connect_btn = ttk.Button(conn_frame, text="Connect", width=8, command=self.connect_oscilloscope, style='Success.TButton')
+        self.connect_btn.grid(row=0, column=2, padx=1)
 
-        # Create a frame for the VISA address input field.
-        address_frame = ttk.Frame(conn_frame)
-        address_frame.pack(fill=tk.X, pady=(0, 10))
+        self.disconnect_btn = ttk.Button(conn_frame, text="Disc", width=6, command=self.disconnect_oscilloscope, style='Warning.TButton', state='disabled')
+        self.disconnect_btn.grid(row=0, column=3, padx=1)
 
-        ttk.Label(address_frame, text="VISA Address:", font=('Arial', 10)).pack(side=tk.LEFT)
-        # A special variable to hold the text of the entry box.
-        self.visa_address_var = tk.StringVar(value="TCPIP0::192.168.1.100::inst0::INSTR")
-        self.visa_entry = ttk.Entry(address_frame, textvariable=self.visa_address_var, width=40)
-        self.visa_entry.pack(side=tk.LEFT, padx=(10, 0), fill=tk.X, expand=True)
+        self.test_btn = ttk.Button(conn_frame, text="Test", width=5, command=self.test_connection, style='Info.TButton', state='disabled')
+        self.test_btn.grid(row=0, column=4, padx=1)
 
-        # Create a frame for the Connect and Disconnect buttons.
-        button_frame = ttk.Frame(conn_frame)
-        button_frame.pack(fill=tk.X)
-
-        # The 'Connect' button. When clicked, it calls the `connect_oscilloscope` method.
-        self.connect_btn = ttk.Button(button_frame, text="Connect", 
-                                    command=self.connect_oscilloscope, style='Success.TButton')
-        self.connect_btn.pack(side=tk.LEFT, padx=(0, 10))
-
-        # The 'Disconnect' button. It's disabled by default.
-        self.disconnect_btn = ttk.Button(button_frame, text="Disconnect", 
-                                       command=self.disconnect_oscilloscope, 
-                                       style='Warning.TButton', state='disabled')
-        self.disconnect_btn.pack(side=tk.LEFT)
-
-        # A label to show the current connection status (e.g., "Connected" or "Disconnected").
         self.conn_status_var = tk.StringVar(value="Disconnected")
-        self.conn_status_label = ttk.Label(button_frame, textvariable=self.conn_status_var, 
-                                         font=('Arial', 10, 'bold'), foreground='red')
-        self.conn_status_label.pack(side=tk.RIGHT)
+        self.conn_status_label = ttk.Label(conn_frame, textvariable=self.conn_status_var, font=('Arial', 8, 'bold'), foreground='#e53e3e')
+        self.conn_status_label.grid(row=0, column=5, sticky='e', padx=(5, 0))
 
-    # This method creates the main control buttons for the application.
-    def create_operations_frame(self, parent):
-        """Creates the UI elements for selecting a channel and running operations."""
-        ops_frame = ttk.LabelFrame(parent, text="Operations", padding="15")
-        ops_frame.pack(fill=tk.X, pady=(0, 20))
+        # Ultra-compact instrument info
+        self.info_text = tk.Text(conn_frame, height=1, font=('Courier', 7), state='disabled', bg='#f8f9fa', relief='flat', borderwidth=0)
+        self.info_text.grid(row=1, column=0, columnspan=6, sticky='ew', pady=(2, 0))
 
-        # Create a dropdown menu for selecting the oscilloscope channel.
-        channel_frame = ttk.Frame(ops_frame)
-        channel_frame.pack(fill=tk.X, pady=(0, 15))
+    def create_channel_config_frame(self, parent, row):
+        """Create ULTRA-COMPACT channel configuration"""
+        config_frame = ttk.LabelFrame(parent, text="Channel Config", padding="3")
+        config_frame.grid(row=row, column=0, sticky='ew', pady=(0, 2))
 
-        ttk.Label(channel_frame, text="Channel:", font=('Arial', 10)).pack(side=tk.LEFT)
-        self.channel_var = tk.IntVar(value=1)  # Variable to hold the selected channel number.
-        channel_combo = ttk.Combobox(channel_frame, textvariable=self.channel_var, 
-                                   values=[1, 2, 3, 4], width=10, state='readonly')
-        channel_combo.pack(side=tk.LEFT, padx=(10, 0))
+        # Single row with all controls
+        col = 0
 
-        # Create a grid to organize the operation buttons.
-        button_grid = ttk.Frame(ops_frame)
-        button_grid.pack(fill=tk.X)
+        ttk.Label(config_frame, text="Ch:", font=('Arial', 8)).grid(row=0, column=col, sticky='w')
+        col += 1
+        self.channel_var = tk.IntVar(value=1)
+        ttk.Combobox(config_frame, textvariable=self.channel_var, values=[1, 2, 3, 4], width=3, state='readonly', font=('Arial', 8)).grid(row=0, column=col, padx=(0, 8))
+        col += 1
 
-        # --- First row of buttons ---
-        self.screenshot_btn = ttk.Button(button_grid, text="Capture Screenshot", 
-                                       command=self.capture_screenshot, style='Info.TButton')
-        self.screenshot_btn.grid(row=0, column=0, padx=5, pady=5, sticky='ew')
+        ttk.Label(config_frame, text="V/div:", font=('Arial', 8)).grid(row=0, column=col, sticky='w')
+        col += 1
+        self.v_scale_var = tk.DoubleVar(value=1.0)
+        ttk.Combobox(config_frame, textvariable=self.v_scale_var, values=[0.001, 0.01, 0.1, 1.0, 10.0], width=6, state='readonly', font=('Arial', 8)).grid(row=0, column=col, padx=(0, 8))
+        col += 1
 
-        self.acquire_data_btn = ttk.Button(button_grid, text="Acquire Waveform Data", 
-                                         command=self.acquire_data, style='Info.TButton')
-        self.acquire_data_btn.grid(row=0, column=1, padx=5, pady=5, sticky='ew')
+        ttk.Label(config_frame, text="Offset:", font=('Arial', 8)).grid(row=0, column=col, sticky='w')
+        col += 1
+        self.v_offset_var = tk.DoubleVar(value=0.0)
+        ttk.Entry(config_frame, textvariable=self.v_offset_var, width=6, font=('Arial', 8)).grid(row=0, column=col, padx=(0, 8))
+        col += 1
 
-        self.export_csv_btn = ttk.Button(button_grid, text="Export to CSV", 
-                                       command=self.export_csv, style='Success.TButton')
-        self.export_csv_btn.grid(row=0, column=2, padx=5, pady=5, sticky='ew')
+        ttk.Label(config_frame, text="Coup:", font=('Arial', 8)).grid(row=0, column=col, sticky='w')
+        col += 1
+        self.coupling_var = tk.StringVar(value="DC")
+        ttk.Combobox(config_frame, textvariable=self.coupling_var, values=["AC", "DC"], width=4, state='readonly', font=('Arial', 8)).grid(row=0, column=col, padx=(0, 8))
+        col += 1
 
-        # --- Second row of buttons ---
-        self.generate_plot_btn = ttk.Button(button_grid, text="Generate Plot", 
-                                          command=self.generate_plot, style='Success.TButton')
-        self.generate_plot_btn.grid(row=1, column=0, padx=5, pady=5, sticky='ew')
+        ttk.Label(config_frame, text="Probe:", font=('Arial', 8)).grid(row=0, column=col, sticky='w')
+        col += 1
+        self.probe_var = tk.DoubleVar(value=1.0)
+        ttk.Combobox(config_frame, textvariable=self.probe_var, values=[1.0, 10.0, 100.0], width=5, state='readonly', font=('Arial', 8)).grid(row=0, column=col, padx=(0, 8))
+        col += 1
 
-        self.full_automation_btn = ttk.Button(button_grid, text="Full Automation", 
-                                            command=self.run_full_automation, 
-                                            style='Success.TButton')
-        self.full_automation_btn.grid(row=1, column=1, padx=5, pady=5, sticky='ew')
+        self.config_channel_btn = ttk.Button(config_frame, text="Configure", command=self.configure_channel, style='Primary.TButton', state='disabled')
+        self.config_channel_btn.grid(row=0, column=col, sticky='ew')
 
-        self.open_folder_btn = ttk.Button(button_grid, text="Open Output Folder", 
-                                        command=self.open_output_folder, style='Info.TButton')
-        self.open_folder_btn.grid(row=1, column=2, padx=5, pady=5, sticky='ew')
+        # Allow last column to expand
+        config_frame.columnconfigure(col, weight=1)
 
-        # Make the buttons expand to fill the available space.
-        for i in range(3):
-            button_grid.columnconfigure(i, weight=1)
+    def create_file_preferences_frame(self, parent, row):
+        """Create ULTRA-COMPACT file preferences"""
+        pref_frame = ttk.LabelFrame(parent, text="File Preferences", padding="3")
+        pref_frame.grid(row=row, column=0, sticky='ew', pady=(0, 2))
 
-        # Disable all these buttons until a connection is made.
+        # Configure columns for proper expansion
+        pref_frame.columnconfigure(1, weight=1)
+        pref_frame.columnconfigure(4, weight=1) 
+        pref_frame.columnconfigure(7, weight=1)
+
+        # Row 1: All three folder types
+        ttk.Label(pref_frame, text="Data:", font=('Arial', 8, 'bold')).grid(row=0, column=0, sticky='w')
+        self.data_path_var = tk.StringVar(value=str(Path.cwd() / "data"))
+        ttk.Entry(pref_frame, textvariable=self.data_path_var, font=('Arial', 7)).grid(row=0, column=1, sticky='ew', padx=(2, 2))
+        ttk.Button(pref_frame, text="...", command=lambda: self.browse_folder('data'), width=3).grid(row=0, column=2, padx=(0, 8))
+
+        ttk.Label(pref_frame, text="Graphs:", font=('Arial', 8, 'bold')).grid(row=0, column=3, sticky='w')
+        self.graph_path_var = tk.StringVar(value=str(Path.cwd() / "graphs"))
+        ttk.Entry(pref_frame, textvariable=self.graph_path_var, font=('Arial', 7)).grid(row=0, column=4, sticky='ew', padx=(2, 2))
+        ttk.Button(pref_frame, text="...", command=lambda: self.browse_folder('graphs'), width=3).grid(row=0, column=5, padx=(0, 8))
+
+        ttk.Label(pref_frame, text="Screenshots:", font=('Arial', 8, 'bold')).grid(row=0, column=6, sticky='w')
+        self.screenshot_path_var = tk.StringVar(value=str(Path.cwd() / "screenshots"))
+        ttk.Entry(pref_frame, textvariable=self.screenshot_path_var, font=('Arial', 7)).grid(row=0, column=7, sticky='ew', padx=(2, 2))
+        ttk.Button(pref_frame, text="...", command=lambda: self.browse_folder('screenshots'), width=3).grid(row=0, column=8)
+
+        # Row 2: Graph title
+        ttk.Label(pref_frame, text="Title:", font=('Arial', 8, 'bold')).grid(row=1, column=0, sticky='w', pady=(2, 0))
+        self.graph_title_var = tk.StringVar(value="")
+        ttk.Entry(pref_frame, textvariable=self.graph_title_var, font=('Arial', 8)).grid(row=1, column=1, columnspan=7, sticky='ew', padx=(2, 2), pady=(2, 0))
+        ttk.Label(pref_frame, text="(auto)", font=('Arial', 7, 'italic'), foreground='gray').grid(row=1, column=8, pady=(2, 0))
+
+    def create_operations_frame(self, parent, row):
+        """Create ULTRA-COMPACT operations controls"""
+        ops_frame = ttk.LabelFrame(parent, text="Operations", padding="3")
+        ops_frame.grid(row=row, column=0, sticky='ew', pady=(0, 2))
+
+        # Configure columns to distribute evenly
+        for i in range(6):
+            ops_frame.columnconfigure(i, weight=1)
+
+        # Single row with all buttons - compact text
+        self.screenshot_btn = ttk.Button(ops_frame, text="Screenshot", command=self.capture_screenshot, style='Info.TButton')
+        self.screenshot_btn.grid(row=0, column=0, sticky='ew', padx=1)
+
+        self.acquire_data_btn = ttk.Button(ops_frame, text="Acquire Data", command=self.acquire_data, style='Primary.TButton')
+        self.acquire_data_btn.grid(row=0, column=1, sticky='ew', padx=1)
+
+        self.export_csv_btn = ttk.Button(ops_frame, text="Export CSV", command=self.export_csv, style='Success.TButton')
+        self.export_csv_btn.grid(row=0, column=2, sticky='ew', padx=1)
+
+        self.generate_plot_btn = ttk.Button(ops_frame, text="Generate Plot", command=self.generate_plot, style='Success.TButton')
+        self.generate_plot_btn.grid(row=0, column=3, sticky='ew', padx=1)
+
+        self.full_automation_btn = ttk.Button(ops_frame, text="Full Auto", command=self.run_full_automation, style='Primary.TButton')
+        self.full_automation_btn.grid(row=0, column=4, sticky='ew', padx=1)
+
+        self.open_folder_btn = ttk.Button(ops_frame, text="Open Folder", command=self.open_output_folder, style='Info.TButton')
+        self.open_folder_btn.grid(row=0, column=5, sticky='ew', padx=1)
+
+        # Disable initially
         self.disable_operation_buttons()
 
-    # This method creates the area at the bottom of the GUI for showing status and log messages.
-    def create_status_frame(self, parent):
-        """Creates the UI elements for displaying the current status and activity log."""
-        status_frame = ttk.LabelFrame(parent, text="Status & Logs", padding="15")
-        status_frame.pack(fill=tk.BOTH, expand=True)
+    def create_status_frame(self, parent, row):
+        """Create status frame that EXPANDS to fill ALL remaining space"""
+        status_frame = ttk.LabelFrame(parent, text="Status & Activity Log", padding="3")
+        status_frame.grid(row=row, column=0, sticky='nsew')  # NSEW fills all available space!
 
-        # A label to show the status of the current operation (e.g., "Connecting...", "Ready").
-        self.current_operation_var = tk.StringVar(value="Ready")
-        ttk.Label(status_frame, text="Current Operation:", font=('Arial', 10)).pack(anchor='w')
-        operation_label = ttk.Label(status_frame, textvariable=self.current_operation_var, 
-                                  font=('Arial', 10, 'bold'), foreground='#2c5aa0')
-        operation_label.pack(anchor='w', pady=(0, 10))
+        # Configure status frame for proper expansion
+        status_frame.columnconfigure(0, weight=1)
+        status_frame.rowconfigure(0, weight=0)  # Status line - fixed
+        status_frame.rowconfigure(1, weight=0)  # Controls line - fixed  
+        status_frame.rowconfigure(2, weight=1)  # LOG TEXT - EXPANDS TO FILL ALL REMAINING SPACE!
 
-        # A text box with a scrollbar to display a running log of all actions and errors.
-        ttk.Label(status_frame, text="Activity Log:", font=('Arial', 10)).pack(anchor='w')
-        self.log_text = scrolledtext.ScrolledText(status_frame, height=10, font=('Courier', 9))
-        self.log_text.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
+        # Status line - compact
+        self.current_operation_var = tk.StringVar(value="Ready - Connect to oscilloscope")
+        status_label = ttk.Label(status_frame, textvariable=self.current_operation_var, font=('Arial', 9, 'bold'), foreground='#1a365d')
+        status_label.grid(row=0, column=0, sticky='ew', pady=(0, 2))
 
-        # A button to clear all messages from the log box.
-        ttk.Button(status_frame, text="Clear Log", command=self.clear_log).pack(anchor='e', pady=(5, 0))
+        # Controls line - compact
+        controls_frame = ttk.Frame(status_frame)
+        controls_frame.grid(row=1, column=0, sticky='ew', pady=(0, 2))
+        controls_frame.columnconfigure(1, weight=1)  # Spacer expands
 
+        ttk.Label(controls_frame, text="Activity Log:", font=('Arial', 9, 'bold')).grid(row=0, column=0, sticky='w')
+        ttk.Frame(controls_frame).grid(row=0, column=1, sticky='ew')  # Spacer
+        ttk.Button(controls_frame, text="Clear", command=self.clear_log, width=6).grid(row=0, column=2, padx=(0, 2))
+        ttk.Button(controls_frame, text="Save", command=self.save_log, width=6).grid(row=0, column=3)
+
+        # THE MAGIC: LOG TEXT EXPANDS TO FILL ALL REMAINING SPACE!
+        self.log_text = scrolledtext.ScrolledText(status_frame, 
+                                                 font=('Consolas', 8),
+                                                 bg='#1a1a1a', 
+                                                 fg='#00ff00', 
+                                                 insertbackground='white',
+                                                 wrap=tk.WORD)
+        self.log_text.grid(row=2, column=0, sticky='nsew')  # NSEW = fills ALL remaining space
+
+    def browse_folder(self, folder_type):
+        """
+        Open a folder browser dialog to select a custom save location.
+        
+        Allows the user to choose a directory for saving specific types of files
+        (data, graphs, or screenshots). Updates the corresponding path variable
+        and creates the directory if it doesn't exist.
+        
+        Args:
+            folder_type: Type of folder to browse for ('data', 'graphs', or 'screenshots')
+        """
+        try:
+            # Map folder types to their corresponding StringVar attribute names
+            path_var_mapping = {
+                'data': 'data_path_var',
+                'graphs': 'graph_path_var',
+                'screenshots': 'screenshot_path_var'
+            }
+
+            # Get the attribute name for this folder type
+            var_name = path_var_mapping.get(folder_type)
+            if not var_name:
+                raise ValueError(f"Unknown folder type: {folder_type}")
+
+            # Get the current path value, use current working directory as fallback
+            current_path = getattr(self, var_name).get()
+            if not current_path or not os.path.exists(current_path):
+                current_path = str(Path.cwd())
+
+            self.log_message(f"Opening folder dialog for {folder_type}...")
+
+            # Open the folder selection dialog
+            # mustexist=False allows creating new directories
+            folder_path = filedialog.askdirectory(
+                initialdir=current_path,
+                title=f"Select {folder_type.title()} Save Location",
+                mustexist=False
+            )
+
+            # If user selected a folder (didn't cancel)
+            if folder_path and folder_path.strip():
+                # Update the StringVar with the new path
+                getattr(self, var_name).set(folder_path)
+                # Update the save_locations dictionary
+                self.save_locations[folder_type] = folder_path
+                self.log_message(f"Updated {folder_type}: {folder_path}", "SUCCESS")
+                # Create the directory if it doesn't exist
+                Path(folder_path).mkdir(parents=True, exist_ok=True)
+                self.log_message(f"Directory verified: {folder_path}")
+            else:
+                self.log_message(f"Folder selection cancelled for {folder_type}")
+
+        except Exception as e:
+            self.log_message(f"Error selecting {folder_type} folder: {str(e)}", "ERROR")
+            messagebox.showerror("Folder Selection Error", f"Error: {str(e)}")
+    
     def log_message(self, message: str, level: str = "INFO"):
-        """Add message to log display"""
+        """
+        Add a timestamped message to the activity log with color coding.
+        
+        Inserts a message into the scrolled text widget with appropriate color
+        based on the message level. Automatically scrolls to show the latest message.
+        
+        Args:
+            message: The message text to log
+            level: Message severity level ("INFO", "SUCCESS", "WARNING", or "ERROR")
+        """
+        # Create timestamp and format log entry
         timestamp = datetime.now().strftime("%H:%M:%S")
-        log_entry = f"[{timestamp}] {level}: {message}\n"
+        log_entry = f"[{timestamp}] {message}\n"
 
-        self.log_text.insert(tk.END, log_entry)
-        self.log_text.see(tk.END)
+        try:
+            # Insert the message at the end of the log
+            self.log_text.insert(tk.END, log_entry)
+            # Auto-scroll to show the latest message
+            self.log_text.see(tk.END)
 
-        # Color coding for different levels
-        if level == "ERROR":
-            self.log_text.tag_add("error", f"end-{len(log_entry)}c", "end-1c")
-            self.log_text.tag_config("error", foreground="red")
-        elif level == "SUCCESS":
-            self.log_text.tag_add("success", f"end-{len(log_entry)}c", "end-1c")
-            self.log_text.tag_config("success", foreground="green")
+            # Apply color coding based on message level
+            # Tag names are used to apply formatting to specific text ranges
+            if level == "ERROR":
+                # Red color for errors
+                self.log_text.tag_add("error", f"end-{len(log_entry)}c", "end-1c")
+                self.log_text.tag_config("error", foreground="#ff6b6b")
+            elif level == "SUCCESS":
+                # Green color for successful operations
+                self.log_text.tag_add("success", f"end-{len(log_entry)}c", "end-1c")
+                self.log_text.tag_config("success", foreground="#51cf66")
+            elif level == "WARNING":
+                # Yellow color for warnings
+                self.log_text.tag_add("warning", f"end-{len(log_entry)}c", "end-1c")
+                self.log_text.tag_config("warning", foreground="#ffd43b")
+            else:
+                # Light blue color for informational messages
+                self.log_text.tag_add("info", f"end-{len(log_entry)}c", "end-1c")
+                self.log_text.tag_config("info", foreground="#74c0fc")
+        except Exception as e:
+            # Fallback to console if GUI logging fails
+            print(f"Log error: {e}")
 
     def clear_log(self):
-        """Clear the log display"""
-        self.log_text.delete(1.0, tk.END)
+        """Clear log"""
+        try:
+            self.log_text.delete(1.0, tk.END)
+            self.log_message("Log cleared")
+        except Exception as e:
+            print(f"Clear error: {e}")
+
+    def save_log(self):
+        """Save log to file"""
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            log_content = self.log_text.get(1.0, tk.END)
+
+            filename = filedialog.asksaveasfilename(
+                defaultextension=".txt",
+                filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+                initialname=f"oscilloscope_log_{timestamp}.txt"
+            )
+
+            if filename:
+                with open(filename, 'w') as f:
+                    f.write(f"Oscilloscope Automation Log - {datetime.now()}\n{'='*50}\n\n{log_content}")
+                self.log_message(f"Log saved: {filename}", "SUCCESS")
+        except Exception as e:
+            self.log_message(f"Save error: {e}", "ERROR")
 
     def update_status(self, status: str):
-        """Update current operation status"""
-        self.current_operation_var.set(status)
-        self.root.update_idletasks()
+        """Update status"""
+        try:
+            self.current_operation_var.set(status)
+            self.root.update_idletasks()
+        except:
+            pass
 
     def disable_operation_buttons(self):
-        """Disable all operation buttons"""
-        buttons = [self.screenshot_btn, self.acquire_data_btn, self.export_csv_btn, 
-                  self.generate_plot_btn, self.full_automation_btn, self.open_folder_btn]
+        """Disable operation buttons"""
+        buttons = [self.screenshot_btn, self.acquire_data_btn, self.export_csv_btn,
+                  self.generate_plot_btn, self.full_automation_btn, self.open_folder_btn,
+                  self.config_channel_btn, self.test_btn]
         for btn in buttons:
-            btn.configure(state='disabled')
+            try:
+                btn.configure(state='disabled')
+            except:
+                pass
 
     def enable_operation_buttons(self):
-        """Enable all operation buttons"""
-        buttons = [self.screenshot_btn, self.acquire_data_btn, self.export_csv_btn, 
-                  self.generate_plot_btn, self.full_automation_btn, self.open_folder_btn]
+        """Enable operation buttons"""
+        buttons = [self.screenshot_btn, self.acquire_data_btn, self.export_csv_btn,
+                  self.generate_plot_btn, self.full_automation_btn, self.open_folder_btn,
+                  self.config_channel_btn, self.test_btn]
         for btn in buttons:
-            btn.configure(state='normal')
+            try:
+                btn.configure(state='normal')
+            except:
+                pass
 
     def connect_oscilloscope(self):
-        """Connect to the oscilloscope"""
+        """
+        Establish connection to the oscilloscope via VISA.
+        
+        Creates a new thread to perform the connection operation without blocking
+        the GUI. Validates the VISA address, creates the oscilloscope instance,
+        and initializes the data acquisition handler upon successful connection.
+        
+        The connection status is communicated back to the GUI thread via the
+        status queue to ensure thread-safe UI updates.
+        """
         def connect_thread():
+            """Worker thread function for oscilloscope connection."""
             try:
+                # Update GUI status
                 self.update_status("Connecting...")
-                self.log_message("Attempting to connect to oscilloscope...")
+                self.log_message("Connecting to Keysight oscilloscope...")
 
+                # Get and validate VISA address from the entry field
                 visa_address = self.visa_address_var.get().strip()
                 if not visa_address:
-                    raise ValueError("VISA address cannot be empty")
+                    raise ValueError("VISA address empty")
 
+                # Create oscilloscope instance with the specified VISA address
                 self.oscilloscope = KeysightDSOX6004A(visa_address)
 
+                # Attempt to establish connection
                 if self.oscilloscope.connect():
+                    # Create data acquisition handler for this oscilloscope
                     self.data_acquisition = OscilloscopeDataAcquisition(self.oscilloscope)
-
-                    # Get instrument info
+                    
+                    # Retrieve instrument information for display
                     info = self.oscilloscope.get_instrument_info()
                     if info:
-                        self.log_message(f"Connected to {info['manufacturer']} {info['model']}", "SUCCESS")
-                        self.log_message(f"Serial: {info['serial_number']}, Firmware: {info['firmware_version']}")
-
-                    self.status_queue.put(("connected", None))
+                        self.log_message(f"Connected: {info['manufacturer']} {info['model']}", "SUCCESS")
+                        # Send success status with instrument info to GUI thread
+                        self.status_queue.put(("connected", info))
+                    else:
+                        # Connected but no info available
+                        self.status_queue.put(("connected", None))
                 else:
-                    raise Exception("Failed to establish connection")
-
+                    raise Exception("Connection failed")
             except Exception as e:
+                # Send error status to GUI thread
                 self.status_queue.put(("error", f"Connection failed: {str(e)}"))
 
+        # Start connection in a separate daemon thread
+        # daemon=True ensures thread terminates when main program exits
         threading.Thread(target=connect_thread, daemon=True).start()
 
     def disconnect_oscilloscope(self):
-        """Disconnect from the oscilloscope"""
+        """Disconnect oscilloscope"""
         try:
             if self.oscilloscope:
                 self.oscilloscope.disconnect()
                 self.oscilloscope = None
                 self.data_acquisition = None
+                self.last_acquired_data = None
 
-            self.conn_status_var.set("Disconnected")
-            self.conn_status_label.configure(foreground='red')
-            self.connect_btn.configure(state='normal')
-            self.disconnect_btn.configure(state='disabled')
-            self.disable_operation_buttons()
+                self.conn_status_var.set("Disconnected")
+                self.conn_status_label.configure(foreground='#e53e3e')
+                self.connect_btn.configure(state='normal')
+                self.disconnect_btn.configure(state='disabled')
+                self.disable_operation_buttons()
 
-            self.update_status("Disconnected")
-            self.log_message("Disconnected from oscilloscope", "SUCCESS")
+                self.info_text.configure(state='normal')
+                self.info_text.delete(1.0, tk.END)
+                self.info_text.configure(state='disabled')
 
+                self.update_status("Disconnected")
+                self.log_message("Disconnected", "SUCCESS")
         except Exception as e:
-            self.log_message(f"Error during disconnection: {e}", "ERROR")
+            self.log_message(f"Disconnect error: {e}", "ERROR")
+
+    def test_connection(self):
+        """Test connection"""
+        try:
+            if self.oscilloscope and self.oscilloscope.is_connected:
+                self.log_message("Connection test: PASSED", "SUCCESS")
+                self.update_status("Test passed")
+                messagebox.showinfo("Test", "Connection OK!")
+            else:
+                self.log_message("Connection test: FAILED", "ERROR")
+                messagebox.showerror("Test", "Not connected")
+        except Exception as e:
+            self.log_message(f"Test error: {e}", "ERROR")
+
+    def configure_channel(self):
+        """Configure channel"""
+        def config_thread():
+            try:
+                channel = self.channel_var.get()
+                v_scale = self.v_scale_var.get()
+                v_offset = self.v_offset_var.get()
+                coupling = self.coupling_var.get()
+                probe = self.probe_var.get()
+
+                self.update_status(f"Configuring Ch{channel}...")
+                self.log_message(f"Ch{channel}: {v_scale}V/div, {v_offset}V, {coupling}, {probe}x")
+
+                success = self.oscilloscope.configure_channel(
+                    channel=channel, vertical_scale=v_scale, vertical_offset=v_offset,
+                    coupling=coupling, probe_attenuation=probe)
+
+                if success:
+                    self.status_queue.put(("channel_configured", f"Ch{channel} configured"))
+                else:
+                    self.status_queue.put(("error", f"Ch{channel} config failed"))
+            except Exception as e:
+                self.status_queue.put(("error", f"Config error: {str(e)}"))
+
+        if self.oscilloscope and self.oscilloscope.is_connected:
+            threading.Thread(target=config_thread, daemon=True).start()
+        else:
+            messagebox.showerror("Error", "Not connected")
 
     def capture_screenshot(self):
-        """Capture oscilloscope screenshot"""
+        """Capture screenshot"""
         def screenshot_thread():
             try:
                 self.update_status("Capturing screenshot...")
-                self.log_message("Starting screenshot capture...")
+                self.log_message("Capturing screenshot...")
+
+                screenshot_dir = Path(self.screenshot_path_var.get())
+                screenshot_dir.mkdir(parents=True, exist_ok=True)
 
                 filename = self.oscilloscope.capture_screenshot()
                 if filename:
+                    original_path = Path(filename)
+                    if original_path.parent != screenshot_dir:
+                        new_path = screenshot_dir / original_path.name
+                        import shutil
+                        shutil.move(str(original_path), str(new_path))
+                        filename = str(new_path)
+
                     self.status_queue.put(("screenshot_success", filename))
                 else:
-                    self.status_queue.put(("error", "Screenshot capture failed"))
-
+                    self.status_queue.put(("error", "Screenshot failed"))
             except Exception as e:
                 self.status_queue.put(("error", f"Screenshot error: {str(e)}"))
 
         if self.oscilloscope and self.oscilloscope.is_connected:
             threading.Thread(target=screenshot_thread, daemon=True).start()
         else:
-            messagebox.showerror("Error", "Oscilloscope not connected")
+            messagebox.showerror("Error", "Not connected")
 
     def acquire_data(self):
-        """Acquire waveform data"""
+        """Acquire data"""
         def acquire_thread():
             try:
-                self.update_status("Acquiring waveform data...")
-                self.log_message(f"Acquiring data from channel {self.channel_var.get()}...")
+                self.update_status("Acquiring data...")
+                self.log_message(f"Acquiring Ch{self.channel_var.get()}...")
 
                 data = self.data_acquisition.acquire_waveform_data(self.channel_var.get())
                 if data:
                     self.status_queue.put(("data_acquired", data))
                 else:
                     self.status_queue.put(("error", "Data acquisition failed"))
-
             except Exception as e:
-                self.status_queue.put(("error", f"Data acquisition error: {str(e)}"))
+                self.status_queue.put(("error", f"Acquire error: {str(e)}"))
 
         if self.data_acquisition:
             threading.Thread(target=acquire_thread, daemon=True).start()
         else:
-            messagebox.showerror("Error", "Oscilloscope not connected")
+            messagebox.showerror("Error", "Not connected")
 
     def export_csv(self):
-        """Export last acquired data to CSV"""
+        """Export CSV"""
         if not hasattr(self, 'last_acquired_data') or not self.last_acquired_data:
-            messagebox.showwarning("Warning", "No data available. Please acquire data first.")
+            messagebox.showwarning("Warning", "No data. Acquire first.")
             return
 
         def export_thread():
             try:
-                self.update_status("Exporting to CSV...")
-                self.log_message("Exporting waveform data to CSV...")
+                self.update_status("Exporting CSV...")
+                self.log_message("Exporting CSV...")
 
-                filename = self.data_acquisition.export_to_csv(self.last_acquired_data)
+                filename = self.data_acquisition.export_to_csv(
+                    self.last_acquired_data, custom_path=self.data_path_var.get())
+
                 if filename:
                     self.status_queue.put(("csv_exported", filename))
                 else:
                     self.status_queue.put(("error", "CSV export failed"))
-
             except Exception as e:
-                self.status_queue.put(("error", f"CSV export error: {str(e)}"))
+                self.status_queue.put(("error", f"CSV error: {str(e)}"))
 
         threading.Thread(target=export_thread, daemon=True).start()
 
     def generate_plot(self):
-        """Generate plot from last acquired data"""
+        """Generate plot"""
         if not hasattr(self, 'last_acquired_data') or not self.last_acquired_data:
-            messagebox.showwarning("Warning", "No data available. Please acquire data first.")
+            messagebox.showwarning("Warning", "No data. Acquire first.")
             return
 
         def plot_thread():
             try:
                 self.update_status("Generating plot...")
-                self.log_message("Generating waveform plot...")
+                self.log_message("Generating plot...")
 
-                filename = self.data_acquisition.generate_waveform_plot(self.last_acquired_data)
+                custom_title = self.graph_title_var.get().strip() or None
+                filename = self.data_acquisition.generate_waveform_plot(
+                    self.last_acquired_data, custom_path=self.graph_path_var.get(), plot_title=custom_title)
+
                 if filename:
                     self.status_queue.put(("plot_generated", filename))
                 else:
-                    self.status_queue.put(("error", "Plot generation failed"))
-
+                    self.status_queue.put(("error", "Plot failed"))
             except Exception as e:
-                self.status_queue.put(("error", f"Plot generation error: {str(e)}"))
+                self.status_queue.put(("error", f"Plot error: {str(e)}"))
 
         threading.Thread(target=plot_thread, daemon=True).start()
 
     def run_full_automation(self):
-        """Run complete automation sequence"""
+        """
+        Execute the complete automation workflow in sequence.
+        
+        Performs all oscilloscope operations in a single automated sequence:
+        1. Capture screenshot of oscilloscope display
+        2. Acquire waveform data from selected channel
+        3. Export data to CSV file
+        4. Generate plot with statistics
+        
+        All operations run in a background thread to keep the GUI responsive.
+        Results are saved to user-specified directories with timestamped filenames.
+        """
         def full_automation_thread():
+            """Worker thread function for full automation sequence."""
             try:
+                # Get user-configured parameters
                 channel = self.channel_var.get()
+                custom_title = self.graph_title_var.get().strip() or None
 
-                # Step 1: Capture screenshot
-                self.update_status("Full Automation: Capturing screenshot...")
-                self.log_message("Starting full automation sequence...")
-                self.log_message("Step 1/4: Capturing screenshot...")
+                self.log_message("Starting full automation...")
 
+                # Step 1: Capture screenshot of oscilloscope display
+                self.update_status("Step 1/4: Screenshot...")
+                self.log_message("Step 1/4: Screenshot...")
                 screenshot_file = self.oscilloscope.capture_screenshot()
-                if not screenshot_file:
-                    raise Exception("Screenshot capture failed")
+                if screenshot_file:
+                    # Move screenshot to user-specified directory if needed
+                    screenshot_dir = Path(self.screenshot_path_var.get())
+                    screenshot_dir.mkdir(parents=True, exist_ok=True)
+                    original_path = Path(screenshot_file)
+                    if original_path.parent != screenshot_dir:
+                        new_path = screenshot_dir / original_path.name
+                        import shutil
+                        shutil.move(str(original_path), str(new_path))
+                        screenshot_file = str(new_path)
 
-                # Step 2: Acquire data
-                self.update_status("Full Automation: Acquiring data...")
-                self.log_message("Step 2/4: Acquiring waveform data...")
-
+                # Step 2: Acquire waveform data from the oscilloscope
+                self.update_status("Step 2/4: Acquiring data...")
+                self.log_message("Step 2/4: Acquiring data...")
                 data = self.data_acquisition.acquire_waveform_data(channel)
                 if not data:
                     raise Exception("Data acquisition failed")
 
-                # Step 3: Export CSV
-                self.update_status("Full Automation: Exporting CSV...")
-                self.log_message("Step 3/4: Exporting to CSV...")
-
-                csv_file = self.data_acquisition.export_to_csv(data)
+                # Step 3: Export acquired data to CSV format
+                self.update_status("Step 3/4: Exporting CSV...")
+                self.log_message("Step 3/4: Exporting CSV...")
+                csv_file = self.data_acquisition.export_to_csv(data, custom_path=self.data_path_var.get())
                 if not csv_file:
                     raise Exception("CSV export failed")
 
-                # Step 4: Generate plot
-                self.update_status("Full Automation: Generating plot...")
+                # Step 4: Generate plot with statistics
+                self.update_status("Step 4/4: Generating plot...")
                 self.log_message("Step 4/4: Generating plot...")
-
-                plot_file = self.data_acquisition.generate_waveform_plot(data)
+                plot_file = self.data_acquisition.generate_waveform_plot(
+                    data, custom_path=self.graph_path_var.get(), plot_title=custom_title)
                 if not plot_file:
-                    raise Exception("Plot generation failed")
+                    raise Exception("Plot failed")
 
-                results = {
-                    'screenshot': screenshot_file,
-                    'csv': csv_file,
-                    'plot': plot_file,
-                    'data': data
-                }
-
+                # Package all results and send to GUI thread
+                results = {'screenshot': screenshot_file, 'csv': csv_file, 'plot': plot_file, 'data': data}
                 self.status_queue.put(("full_automation_complete", results))
 
             except Exception as e:
-                self.status_queue.put(("error", f"Full automation error: {str(e)}"))
+                self.status_queue.put(("error", f"Automation error: {str(e)}"))
 
         if self.data_acquisition:
             threading.Thread(target=full_automation_thread, daemon=True).start()
         else:
-            messagebox.showerror("Error", "Oscilloscope not connected")
+            messagebox.showerror("Error", "Not connected")
 
     def open_output_folder(self):
-        """Open the output folder in file explorer"""
+        """Open output folders"""
         try:
-            if self.oscilloscope:
-                self.oscilloscope.setup_output_directories()
-                import subprocess
-                import platform
+            import subprocess
+            import platform
 
-                base_path = Path.cwd()
+            folders = [("Data", self.data_path_var.get()), ("Graphs", self.graph_path_var.get()), ("Screenshots", self.screenshot_path_var.get())]
 
-                if platform.system() == "Windows":
-                    subprocess.run(['explorer', str(base_path)], check=True)
-                elif platform.system() == "Darwin":  # macOS
-                    subprocess.run(['open', str(base_path)], check=True)
-                else:  # Linux
-                    subprocess.run(['xdg-open', str(base_path)], check=True)
+            for name, path in folders:
+                try:
+                    path_obj = Path(path)
+                    path_obj.mkdir(parents=True, exist_ok=True)
 
-                self.log_message("Opened output folder")
-            else:
-                messagebox.showinfo("Info", "Connect to oscilloscope first to create output folders")
+                    if platform.system() == "Windows":
+                        subprocess.run(['explorer', str(path_obj)], check=True)
+                    elif platform.system() == "Darwin":
+                        subprocess.run(['open', str(path_obj)], check=True)
+                    else:
+                        subprocess.run(['xdg-open', str(path_obj)], check=True)
 
+                    self.log_message(f"Opened {name}")
+                except Exception as e:
+                    self.log_message(f"Failed to open {name}: {e}", "ERROR")
         except Exception as e:
-            self.log_message(f"Error opening folder: {e}", "ERROR")
+            self.log_message(f"Folder error: {e}", "ERROR")
+
+    def display_instrument_info(self, info):
+        """Display instrument info"""
+        try:
+            self.info_text.configure(state='normal')
+            self.info_text.delete(1.0, tk.END)
+
+            if info:
+                info_str = f"Connected: {info.get('manufacturer', 'N/A')} {info.get('model', 'N/A')} | S/N: {info.get('serial_number', 'N/A')} | FW: {info.get('firmware_version', 'N/A')}"
+            else:
+                info_str = "Connected but no instrument info available"
+
+            self.info_text.insert(1.0, info_str)
+            self.info_text.configure(state='disabled')
+        except Exception as e:
+            print(f"Info display error: {e}")
 
     def check_status_updates(self):
-        """Check for status updates from background threads"""
+        """Check for status updates"""
         try:
             while True:
                 status_type, data = self.status_queue.get_nowait()
 
                 if status_type == "connected":
                     self.conn_status_var.set("Connected")
-                    self.conn_status_label.configure(foreground='green')
+                    self.conn_status_label.configure(foreground='#2d7d32')
                     self.connect_btn.configure(state='disabled')
                     self.disconnect_btn.configure(state='normal')
                     self.enable_operation_buttons()
-                    self.update_status("Connected - Ready for operations")
+                    self.update_status("Connected - Ready")
+                    if data:
+                        self.display_instrument_info(data)
 
                 elif status_type == "error":
                     self.log_message(data, "ERROR")
                     self.update_status("Error occurred")
 
                 elif status_type == "screenshot_success":
-                    self.log_message(f"Screenshot saved: {data}", "SUCCESS")
-                    self.update_status("Screenshot captured successfully")
+                    self.log_message(f"Screenshot saved: {Path(data).name}", "SUCCESS")
+                    self.update_status("Screenshot saved")
 
                 elif status_type == "data_acquired":
                     self.last_acquired_data = data
-                    self.log_message(f"Acquired {data['points_count']} data points from channel {data['channel']}", "SUCCESS")
-                    self.update_status("Data acquisition completed")
+                    self.log_message(f"Data acquired: {data['points_count']} points Ch{data['channel']}", "SUCCESS")
+                    self.update_status("Data acquired")
 
                 elif status_type == "csv_exported":
-                    self.log_message(f"CSV exported: {data}", "SUCCESS")
-                    self.update_status("CSV export completed")
+                    self.log_message(f"CSV exported: {Path(data).name}", "SUCCESS")
+                    self.update_status("CSV exported")
 
                 elif status_type == "plot_generated":
-                    self.log_message(f"Plot generated: {data}", "SUCCESS")
-                    self.update_status("Plot generation completed")
+                    self.log_message(f"Plot generated: {Path(data).name}", "SUCCESS")
+                    self.update_status("Plot generated")
+
+                elif status_type == "channel_configured":
+                    self.log_message(data, "SUCCESS")
+                    self.update_status("Channel configured")
 
                 elif status_type == "full_automation_complete":
                     self.last_acquired_data = data['data']
-                    self.log_message("Full automation sequence completed successfully!", "SUCCESS")
-                    self.log_message(f"Files created:", "SUCCESS")
-                    self.log_message(f"  Screenshot: {data['screenshot']}", "SUCCESS")
-                    self.log_message(f"  CSV Data: {data['csv']}", "SUCCESS") 
-                    self.log_message(f"  Plot: {data['plot']}", "SUCCESS")
-                    self.update_status("Full automation completed")
+                    self.log_message("Full automation completed successfully!", "SUCCESS")
+                    self.log_message(f"Screenshot: {Path(data['screenshot']).name}", "SUCCESS")
+                    self.log_message(f"CSV: {Path(data['csv']).name}", "SUCCESS")
+                    self.log_message(f"Plot: {Path(data['plot']).name}", "SUCCESS")
+                    self.update_status("Automation complete")
 
-                    messagebox.showinfo("Success", 
-                                      f"Full automation completed successfully!\n\n"
-                                      f"Files created:\n"
-                                      f"• Screenshot: {Path(data['screenshot']).name}\n"
-                                      f"• CSV Data: {Path(data['csv']).name}\n"
-                                      f"• Plot: {Path(data['plot']).name}")
+                    messagebox.showinfo("Complete!", f"Full automation complete!\n\nScreenshot: {Path(data['screenshot']).name}\nCSV: {Path(data['csv']).name}\nPlot: {Path(data['plot']).name}")
 
         except queue.Empty:
             pass
+        except Exception as e:
+            print(f"Status update error: {e}")
         finally:
             self.root.after(100, self.check_status_updates)
 
-    # This method starts the GUI application.
     def run(self):
-        """Starts the main event loop of the Tkinter application."""
+        """Start the application"""
         try:
-            self.log_message("Oscilloscope Automation Suite started")
-            # This line starts the GUI, makes it visible, and waits for user interaction (like button clicks).
+            self.log_message("Enhanced Oscilloscope Automation - Professional Version", "SUCCESS")
+            self.log_message("Features: Browse folders + Responsive layout + Auto-scaling", "SUCCESS")
+            self.log_message("Ready to connect to oscilloscope")
             self.root.mainloop()
         except KeyboardInterrupt:
-            # This part is for gracefully handling when the user closes the program with Ctrl+C.
-            self.log_message("Application interrupted by user")
+            self.log_message("Application interrupted")
+        except Exception as e:
+            self.log_message(f"Application error: {e}", "ERROR")
         finally:
-            # This code will run when the application is closing, for any reason.
-            if self.oscilloscope:
-                # Ensure the oscilloscope is properly disconnected to avoid leaving it in a bad state.
-                self.oscilloscope.disconnect()
+            if hasattr(self, 'oscilloscope') and self.oscilloscope:
+                try:
+                    self.oscilloscope.disconnect()
+                except:
+                    pass
 
-
-# This is the main function that starts the entire application.
 def main():
-    """Main application entry point."""
+    """Main entry point"""
+    print("Enhanced Keysight Oscilloscope Automation - Professional Version")
+    print("Features: Browse folders + Responsive layout + True auto-scaling")
+    print("Capabilities: Custom save locations + Custom titles + Responsive GUI")
+    print("=" * 80)
+
     try:
-        # Create an instance of our GUI class.
-        app = AutomationGUI()
-        # Run the application.
+        app = TrulyResponsiveAutomationGUI()
         app.run()
     except Exception as e:
-        # If a major, unhandled error occurs, print it to the console.
-        print(f"Application error: {e}")
+        print(f"Error: {e}")
         input("Press Enter to exit...")
 
-
-# This is a standard Python construct. It ensures that the `main()` function is called only when the script is executed directly.
 if __name__ == "__main__":
     main()

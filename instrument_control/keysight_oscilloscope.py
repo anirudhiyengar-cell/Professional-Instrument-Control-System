@@ -117,7 +117,8 @@ class KeysightDSOX6004A:
         try:
             self.setup_output_directories()
             if filename is None:
-                timestamp = datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
+                # Use hyphens instead of colons for Windows compatibility
+                timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                 if include_timestamp:
                     filename = f"scope_screenshot_{timestamp}.{image_format.lower()}"
                 else:
