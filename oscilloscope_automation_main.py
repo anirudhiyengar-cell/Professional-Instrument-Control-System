@@ -408,7 +408,7 @@ class TrulyResponsiveAutomationGUI:
         remain fixed size.
         """
         # Set window title
-        self.root.title("Enhanced Keysight Oscilloscope Automation")
+        self.root.title("Keysight Oscilloscope Automation")
 
         # Set initial window size and background color
         self.root.geometry("1000x650")  # Width x Height in pixels
@@ -447,7 +447,7 @@ class TrulyResponsiveAutomationGUI:
 
         # Create title label at the top
         title_label = ttk.Label(main_frame, 
-                               text="Enhanced Keysight Oscilloscope Automation",
+                               text="Keysight Oscilloscope Automation",
                                style='Title.TLabel')
         title_label.grid(row=0, column=0, pady=(0, 3), sticky='ew')
 
@@ -471,7 +471,7 @@ class TrulyResponsiveAutomationGUI:
         """
         # Title label style: Large bold font with dark blue color
         self.style.configure('Title.TLabel', 
-                            font=('Arial', 12, 'bold'), 
+                            font=('Times New Roman', 12, 'bold'), 
                             foreground='#1a365d',  # Dark blue text
                             background='#f5f5f5')  # Light gray background
         
@@ -488,7 +488,7 @@ class TrulyResponsiveAutomationGUI:
         conn_frame.columnconfigure(1, weight=1)  # Entry field expands
 
         # SINGLE ROW layout
-        ttk.Label(conn_frame, text="VISA:", font=('Arial', 8)).grid(row=0, column=0, sticky='w', padx=(0, 3))
+        ttk.Label(conn_frame, text="VISA:", font=('Calibri', 8)).grid(row=0, column=0, sticky='w', padx=(0, 3))
 
         self.visa_address_var = tk.StringVar(value="USB0::0x0957::0x1780::MY65220169::INSTR")
         self.visa_entry = ttk.Entry(conn_frame, textvariable=self.visa_address_var, font=('Arial', 8))
