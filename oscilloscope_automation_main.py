@@ -601,11 +601,16 @@ class TrulyResponsiveAutomationGUI:
         ttk.Entry(pref_frame, textvariable=self.screenshot_path_var, font=('Arial', 7)).grid(row=0, column=7, sticky='ew', padx=(2, 2))
         ttk.Button(pref_frame, text="...", command=lambda: self.browse_folder('screenshots'), width=3).grid(row=0, column=8)
 
-        # Row 2: Graph title
-        ttk.Label(pref_frame, text="Title:", font=('Arial', 8, 'bold')).grid(row=1, column=0, sticky='w', pady=(2, 0))
+        # Row 2: Graph title with helpful hint
+        ttk.Label(pref_frame, text="Plot Title:", font=('Arial', 8, 'bold')).grid(row=1, column=0, sticky='w', pady=(2, 0))
         self.graph_title_var = tk.StringVar(value="")
-        ttk.Entry(pref_frame, textvariable=self.graph_title_var, font=('Arial', 8)).grid(row=1, column=1, columnspan=7, sticky='ew', padx=(2, 2), pady=(2, 0))
-        ttk.Label(pref_frame, text="(auto)", font=('Arial', 7, 'italic'), foreground='gray').grid(row=1, column=8, pady=(2, 0))
+        title_entry = ttk.Entry(pref_frame, textvariable=self.graph_title_var, font=('Arial', 8))
+        title_entry.grid(row=1, column=1, columnspan=6, sticky='ew', padx=(2, 2), pady=(2, 0))
+        
+        # Add helpful hint label
+        hint_label = ttk.Label(pref_frame, text="Multi-channel: adds '- Channel N'", 
+                              font=('Arial', 7, 'italic'), foreground='#666')
+        hint_label.grid(row=1, column=7, columnspan=2, sticky='w', pady=(2, 0))
 
     def create_operations_frame(self, parent, row):
         """Create ULTRA-COMPACT operations controls"""
@@ -1154,7 +1159,6 @@ class TrulyResponsiveAutomationGUI:
         def plot_thread():
             try:
                 self.update_status("Generating plot...")
-                self.log_message("Generating plot...")
                 
                 generated_plots = []
                 custom_title = self.graph_title_var.get().strip() or None
@@ -1162,6 +1166,16 @@ class TrulyResponsiveAutomationGUI:
                 # Check if data is a dictionary (multi-channel) or single channel data
                 if isinstance(self.last_acquired_data, dict) and 'channel' not in self.last_acquired_data:
                     # Multi-channel data: dictionary keyed by channel number
+                    self.log_message(f"Generating plots for {len(self.last_acquired_data)} channel(s)...")
+                    
+                    # Show what titles will be used
+                    if custom_title:
+                        self.log_message(f"Base title: '{custom_title}'")
+                        for channel in sorted(self.last_acquired_data.keys()):
+                            self.log_message(f"  Ch{channel}: '{custom_title} - Channel {channel}'")
+                    else:
+                        self.log_message("Using auto-generated titles")
+                    
                     for channel, data in self.last_acquired_data.items():
                         # Create custom title for each channel if base title provided
                         if custom_title:
@@ -1176,6 +1190,11 @@ class TrulyResponsiveAutomationGUI:
                             self.log_message(f"Ch{channel} plot generated: {Path(filename).name}", "SUCCESS")
                 else:
                     # Single channel data (backward compatibility)
+                    if custom_title:
+                        self.log_message(f"Generating plot with title: '{custom_title}'")
+                    else:
+                        self.log_message("Generating plot with auto-generated title")
+                        
                     filename = self.data_acquisition.generate_waveform_plot(
                         self.last_acquired_data, custom_path=self.graph_path_var.get(), plot_title=custom_title)
                     if filename:
